@@ -16,17 +16,18 @@
 set -u
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
-tsdec="${1:-$here/tsdec}"
 work="$here/test"
 mkdir -p "$work"
 
-# a bare "tsdec.exe" is not executable for the shell, it needs a path
-case "$tsdec" in
-   */*|*./*) ;;
-   *) tsdec="./$tsdec" ;;
-esac
-
-if [ ! -x "$tsdec" ]; then
+# Resolve the binary to an absolute path straight away. A relative one works
+# for the shell but not for the python helper that later has to exec it, since
+# that runs with its own idea of the current directory.
+tsdec="${1:-$here/tsdec}"
+if [ -x "$tsdec" ]; then
+   tsdec="$(cd "$(dirname "$tsdec")" && pwd)/$(basename "$tsdec")"
+elif [ -x "./$tsdec" ]; then
+   tsdec="$PWD/$(basename "$tsdec")"
+else
    echo "tsdec not found at $tsdec" >&2
    exit 1
 fi
