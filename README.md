@@ -124,6 +124,23 @@ longer than that. `-b 0` turns the protection off.
 Messages go to stderr, so `2>log.txt` captures them and stdout stays clean for
 piping.
 
+### Stopping
+
+Ctrl+C asks the job to stop rather than killing it. Whatever was decrypted up
+to that point is kept: the partial output stays a whole number of packets and
+stays playable, so you can keep what finished rather than starting again.
+
+```sh
+tsdec -f log.cwl -i big-recording.ts -o clear.ts -P
+# ... press Ctrl+C partway through
+# clear.ts now holds everything that was processed before the stop
+```
+
+The stop is noticed between blocks, a block being about a megabyte, so it takes
+effect within a fraction of a second rather than instantly. A stop in the
+threaded path drains the blocks already in flight instead of abandoning them,
+which is why the output never ends mid frame.
+
 ### Migrating from 1.0
 
 Nothing you already scripted breaks. `-f`, `-i`, `-o`, `-e`, `-d`, `-a`, `-b`,

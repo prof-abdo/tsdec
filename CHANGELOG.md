@@ -4,6 +4,26 @@ All notable changes to TSDEC are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **A stop path.** `tsdec_request_cancel()` asks a running job to stop from
+  another thread, and Ctrl+C does the same instead of killing the process
+  mid write. The 0.4.1 GUI had a stop button, so this is what a replacement
+  front end needs to be honest about stopping.
+- **A progress callback.** `tsdec_run()` takes a callback that fires a few
+  times a second with packets done and input size, which is enough to show a
+  real progress bar with a throughput figure and an estimate, rather than a
+  bar that fills on a guess.
+- `tsdec_job_t` replaces the long argument list. The old entry point stays as
+  a wrapper, so nothing existing has to change.
+
+Behaviour worth spelling out: on a stop the scout stops planning but the
+workers drain what is already in the ring. Raising a shared stop flag would
+have abandoned blocks that were planned and possibly decrypted but not yet
+written, cutting the output at an arbitrary packet.
+
 ## [2.0.0] - 2026-09-29
 
 The first release under this repository. Based on TSDEC V0.4.1 by ganymede.
