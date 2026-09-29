@@ -74,8 +74,9 @@ jobs:
 
       - name: Show the toolchain the Makefile will pick
         run: |
-          echo "cc : $(gcc -dumpmachine)"
-          make -n tsdec 2>&1 | head -1
+          gcc -dumpmachine
+          make -n tsdec > toolchain.txt 2>&1
+          cat toolchain.txt
 
       - name: Build and unit test
         run: |
