@@ -94,8 +94,14 @@ jobs:
           cp "$BINARY" "dist/$staged"
           cp README.md LICENSE dist/
 
-          # a tarball for convenience; the bare binary is also uploaded on its own
+          # the tarball carries the binary plus the docs
           tar czf "dist/$ARTIFACT.tar.gz" -C dist "$staged" README.md LICENSE
+
+          # drop the loose docs again: the three platform artifacts are merged
+          # into one directory on the release side, and identical file names
+          # from three platforms would collide
+          rm -f dist/README.md dist/LICENSE
+
           ls -l dist
 
       - name: Upload artifact
@@ -128,5 +134,6 @@ jobs:
           draft: true
           files: |
             staging/*.tar.gz
-            staging/tsdec
-            staging/tsdec.exe
+            staging/tsdec-linux-x86_64
+            staging/tsdec-macos-arm64
+            staging/tsdec-windows-x86_64.exe
