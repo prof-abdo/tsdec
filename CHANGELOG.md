@@ -17,6 +17,10 @@ All notable changes to TSDEC are recorded here. The format follows
 - `tsdec_status_text()` so the command line and `--json` describe a return code
   with the same words. A front end no longer has to invent its own wording.
 - `percent` on every progress event, so a client does not have to recompute it.
+- `total` on the result event, the number of packets in the input. A front end
+  needs it to show how far a stopped run actually got: the packets written is
+  the only honest number it has otherwise, and without a denominator the
+  progress bar either sits at 100% or has to lie.
 
 ### Fixed
 
@@ -35,7 +39,9 @@ All notable changes to TSDEC are recorded here. The format follows
   every unix a run on eight threads was timed as if it had taken eight times
   longer than it did, understating the rate by the same factor. On Windows the
   CRT happens to return elapsed time, which is why this went unnoticed. The
-  timing is now a real monotonic clock on both.
+  timing is now a real monotonic clock on both, and macOS uses the mach clock
+  rather than a feature test macro, because defining one also hides
+  `_SC_NPROCESSORS_ONLN` and breaks the CPU count.
 
 ### Changed
 

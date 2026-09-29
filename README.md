@@ -160,13 +160,14 @@ Progress arrives a few times a second, the last one before the work is done:
 Then exactly one result, and the process exits with the same number as `status`:
 
 ```json
-{"event":"result","status":0,"canceled":false,"packets":1500000,"encrypted":1486377,"decrypted":1500000,"passthrough":13623,"dropped":0,"corrupt":0,"syncs":1,"resyncs":0,"seconds":2.11,"mib_per_second":47.74,"message":"done"}
+{"event":"result","status":0,"canceled":false,"packets":1500000,"total":1500000,"encrypted":1486377,"decrypted":1500000,"passthrough":13623,"dropped":0,"corrupt":0,"syncs":1,"resyncs":0,"seconds":2.11,"mib_per_second":47.74,"message":"done"}
 ```
 
 `status` is `0` on success and `55` when stopped on request, in which case the
-`message` says so and the partial output has been kept. To stop it from a
-parent, send a console control event on Windows or `SIGINT` elsewhere; see
-[Stopping](#stopping).
+`message` says so and the partial output has been kept. `total` is the packet
+count of the input, which is what lets a client show how far a stopped run got
+rather than claiming it finished. To stop it from a parent, send a console
+control event on Windows or `SIGINT` elsewhere; see [Stopping](#stopping).
 
 The event names, the fields and the status codes are the interface. They are
 what [tsdec-gui](https://github.com/prof-abdo/tsdec-gui) is built on.
