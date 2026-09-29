@@ -379,8 +379,20 @@ static double now_seconds (void)
    return (double) clock() / (double) CLOCKS_PER_SEC;
 }
 
+double now_seconds_public (void)
+{
+   return now_seconds();
+}
+
 /* How many whole packets the input holds. Used to turn "x packets done" into a
  * percentage and an estimate. Returns 0 if the size cannot be determined. */
+static unsigned long reader_packet_count (const char *path);
+
+unsigned long tsdec_packet_count (const char *path)
+{
+   return reader_packet_count(path);
+}
+
 static unsigned long reader_packet_count (const char *path)
 {
    FILE *f;
@@ -651,6 +663,8 @@ typedef struct
    /* progress reporting, both polled from the scout */
    unsigned long total_packets;    /* 0 when the size is not known upfront */
    unsigned long reported;
+   double        last_progress;    /* when the callback last fired */
+   int           have_progress_time;
    tsdec_progress_fn on_progress;
    void         *progress_user;
 
@@ -825,6 +839,8 @@ static int decrypt_serial (const char *ifile, FILE *out, const cwl_t *cwl,
    int ret, synced = 0, cur_cw = -1, last_parity = -1;
    unsigned long reported = 0;
    unsigned long total_packets = 0;
+   double last_progress = 0;
+   int have_progress_time = 0;
    size_t n;
    int i;
 
@@ -875,9 +891,16 @@ static int decrypt_serial (const char *ifile, FILE *out, const cwl_t *cwl,
 
       if (on_progress)
       {
-         if (stats->total_packets - reported >= 100000 || total_packets == 0)
+         /* rate limited by time, see the note in scout_main */
+         double now = now_seconds();
+         if (!have_progress_time)
          {
-            reported = stats->total_packets;
+            have_progress_time = 1;
+            last_progress = now;
+         }
+         if (now - last_progress >= 0.1)
+         {
+            last_progress = now;
             on_progress(progress_user, stats->total_packets, total_packets,
                         stats);
          }
@@ -990,10 +1013,20 @@ static void scout_main (pipeline_t *pl)
       if (pl->on_progress)
       {
          unsigned long done = pl->scout_stats.total_packets;
-         /* not more than a few times a second: the callback may be doing
-          * something as costly as touching a socket */
-         if (done - pl->reported >= 100000 || pl->total_packets == 0)
+         /* Rate limit by elapsed time, not by packet count: a count threshold
+          * means a small recording reports nothing until the very end, while
+          * a time threshold keeps the bar moving whatever the file size. The
+          * callback may be doing something as costly as touching a socket, so
+          * cap it at about ten times a second. */
+         double now = now_seconds();
+         if (!pl->have_progress_time)
          {
+            pl->have_progress_time = 1;
+            pl->last_progress = now;
+         }
+         if (now - pl->last_progress >= 0.1)
+         {
+            pl->last_progress = now;
             pl->reported = done;
             pl->on_progress(pl->progress_user, done, pl->total_packets,
                             &pl->scout_stats);

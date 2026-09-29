@@ -131,4 +131,12 @@ int csa_selftest (void);
 extern int g_verbose;
 void tsdec_log (int level, const char *fmt, ...);
 
+/* Monotonic seconds, for a front end computing an elapsed time or a rate.
+ * Exposed because the clock the core uses is not the caller's business. */
+double now_seconds_public (void);
+
+/* Number of whole transport packets a file holds, 0 if it cannot be read.
+ * A front end needs this to turn "packets done" into a percentage. */
+unsigned long tsdec_packet_count (const char *path);
+
 #endif

@@ -161,6 +161,67 @@ static void check_ccw_checksums (const unsigned char *ccw)
    }
 }
 
+/* Emits one JSON object per line describing how the job is going, for a front
+ * end to consume. Progress goes to stdout so it never mixes with the messages
+ * on stderr, and the result line carries the final statistics and exit status.
+ */
+typedef struct
+{
+   double     started;
+   int        total_packets;
+   tsdec_job_t job;
+   stats_t    stats;
+} json_ctx_t;
+
+static void json_escape (const char *in)
+{
+   for (; *in; in++)
+   {
+      if (*in == '"' || *in == '\\')
+         printf("\\%c", *in);
+      else if ((unsigned char) *in < 0x20)
+         printf("\\u%04x", (unsigned char) *in);
+      else
+         putchar(*in);
+   }
+}
+
+static void json_progress (void *user, unsigned long done,
+                           unsigned long total, const stats_t *st)
+{
+   json_ctx_t *ctx = (json_ctx_t *) user;
+   double secs = now_seconds_public() - ctx->started;
+   double mbps = secs > 0 ? (double) done * PCKTSIZE / secs / 1048576.0 : 0;
+   double pct = total ? 100.0 * done / total : 0.0;
+   double eta = (mbps > 0 && total > done)
+                ? ((double) (total - done) * PCKTSIZE / 1048576.0) / mbps : -1;
+
+   printf("{\"event\":\"progress\",\"done\":%lu,\"total\":%lu,"
+          "\"seconds\":%.3f,\"mib_per_second\":%.2f,\"eta\":%.1f,"
+          "\"encrypted\":%lu,\"decrypted\":%lu,\"syncs\":%lu}\n",
+          done, total, secs, mbps, eta,
+          st->encrypted_packets, st->decrypted_packets, st->sync_count);
+   fflush(stdout);
+}
+
+static void json_result (json_ctx_t *ctx, int ret)
+{
+   double secs = now_seconds_public() - ctx->started;
+   const stats_t *s = &ctx->stats;
+
+   printf("{\"event\":\"result\",\"status\":%d,\"canceled\":%s,"
+          "\"packets\":%lu,\"encrypted\":%lu,\"decrypted\":%lu,"
+          "\"passthrough\":%lu,\"dropped\":%lu,\"corrupt\":%lu,"
+          "\"syncs\":%lu,\"resyncs\":%lu,\"seconds\":%.3f,"
+          "\"mib_per_second\":%.2f}\n",
+          ret, s->canceled ? "true" : "false",
+          s->total_packets, s->encrypted_packets, s->decrypted_packets,
+          s->passthrough_packets, s->dropped_packets, s->corrupt_packets,
+          s->sync_count, s->resync_count, secs,
+          secs > 0 ? (double) s->total_packets * PCKTSIZE / secs / 1048576.0 : 0);
+   fflush(stdout);
+}
+
 int main (int argc, char **argv)
 {
    const char *ifile = NULL, *ofile = NULL, *cwfile = NULL, *ccwarg = NULL;
@@ -172,6 +233,7 @@ int main (int argc, char **argv)
    int encrypt_ccw = 0;
    int resync = 0;
    int fix_checksums = 1;
+   int json_mode = 0;
    int nworkers = 0;                 /* 0 = pick from cpu count */
    int pid_filter[128];
    int npid_filter = 0;
@@ -187,6 +249,19 @@ int main (int argc, char **argv)
       const char *a = argv[i];
       char opt;
       const char *val;
+
+      /* long options, the one place where they make sense */
+      if (strcmp(a, "--json") == 0)
+      {
+         json_mode = 1;
+         continue;
+      }
+      if (strncmp(a, "--", 2) == 0)
+      {
+         fprintf(stderr, "TSDEC: unknown option %s\n", a);
+         usage(NULL);
+         return RET_USAGE;
+      }
 
       if (a[0] != '-' || a[1] == 0)
       {
@@ -321,24 +396,53 @@ int main (int argc, char **argv)
       return RET_USAGE;
    }
    if (!ofile)
-      ofile = NULL;             /* analysed below */
-
-   ret = cwl_load(cwfile, &cwl, fix_checksums, verbose);
-   if (ret != RET_OK)
-   {
-      cwl_free(&cwl);
-      return ret;
-   }
-
-   if (!ofile)
    {
       fprintf(stderr, "TSDEC: an output file is required (-o, or - for stdout)\n");
-      cwl_free(&cwl);
       return RET_USAGE;
    }
 
-   ret = decrypt_cwl_file(ifile, ofile, &cwl, cw_blocker, verbose, progress,
-                          pid_filter, npid_filter, resync, nworkers, &stats);
+   ret = cwl_load(cwfile, &cwl, fix_checksums, json_mode ? 0 : verbose);
+   if (ret != RET_OK)
+   {
+      cwl_free(&cwl);
+      if (json_mode)
+      {
+         printf("{\"event\":\"error\",\"message\":\"cannot load the control word log\"}\n");
+         fflush(stdout);
+      }
+      return ret;
+   }
+
+   if (json_mode)
+   {
+      json_ctx_t ctx;
+      tsdec_job_t job;
+
+      memset(&ctx, 0, sizeof(ctx));
+      ctx.started = now_seconds_public();
+      ctx.total_packets = (int) tsdec_packet_count(ifile);
+
+      tsdec_job_init(&job);
+      job.ifile = ifile;
+      job.ofile = ofile;
+      job.cwl = &cwl;
+      job.cw_blocker = cw_blocker;
+      job.verbose = 0;                 /* the json stream replaces the text */
+      job.nworkers = nworkers;
+      job.allow_resync = resync;
+      job.pid_filter = pid_filter;
+      job.npid_filter = npid_filter;
+      job.on_progress = json_progress;
+      job.progress_user = &ctx;
+
+      ret = tsdec_run(&job, &ctx.stats);
+      json_result(&ctx, ret);
+   }
+   else
+   {
+      ret = decrypt_cwl_file(ifile, ofile, &cwl, cw_blocker, verbose, progress,
+                             pid_filter, npid_filter, resync, nworkers, &stats);
+   }
 
    cwl_free(&cwl);
    return ret;
