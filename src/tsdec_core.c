@@ -16,11 +16,10 @@
  */
 
 #define _FILE_OFFSET_BITS 64
-/* clock_gettime() and CLOCK_MONOTONIC are POSIX.1-2001, and macOS hides them
- * behind this macro, where the only alternative is the older
- * gettimeofday(). Define it before any header is pulled in. */
-#ifndef _WIN32
-#define _POSIX_C_SOURCE 200809L
+
+#ifdef __APPLE__
+#include <mach/mach_time.h>
+#include <stdint.h>
 #endif
 
 #include <stdarg.h>
@@ -435,6 +434,19 @@ static size_t reader_fill (reader_t *r)
    return got;
 }
 
+#ifdef __APPLE__
+static mach_timebase_info_data_t mach_base;
+static double mach_per_tick;
+
+static void mach_tick_setup (void)
+{
+   if (mach_timebase_info(&mach_base) == KERN_SUCCESS && mach_base.denom != 0)
+      /* as a double: the ratio is not always whole, and rounding it to an
+       * integer first would skew every measurement that follows */
+      mach_per_tick = (double) mach_base.numer / (double) mach_base.denom;
+}
+#endif
+
 /* Wall clock, because everything derived from it is user facing: the
  * throughput figure and the estimate of how much is left.
  *
@@ -457,10 +469,20 @@ static double now_seconds (void)
    QueryPerformanceCounter(&now);
    return (double) now.QuadPart / (double) freq.QuadPart;
 #else
-   struct timespec ts;
+# ifdef __APPLE__
+   /* the ratio never changes, so resolve it once however many workers ask */
+   static pthread_once_t mach_once = PTHREAD_ONCE_INIT;
 
-   if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
-      return (double) ts.tv_sec + (double) ts.tv_nsec / 1e9;
+   pthread_once(&mach_once, mach_tick_setup);
+   if (mach_per_tick != 0.0)
+      return (double) mach_absolute_time() * mach_per_tick / 1e9;
+# endif
+   {
+      struct timespec ts;
+
+      if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+         return (double) ts.tv_sec + (double) ts.tv_nsec / 1e9;
+   }
 
    /* very old or exotic unix without clock_gettime */
    return (double) clock() / (double) CLOCKS_PER_SEC;

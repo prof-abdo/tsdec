@@ -168,7 +168,7 @@ static void check_ccw_checksums (const unsigned char *ccw)
 typedef struct
 {
    double     started;
-   int        total_packets;
+   unsigned long total_packets;
    tsdec_job_t job;
    stats_t    stats;
 } json_ctx_t;
@@ -211,12 +211,13 @@ static void json_result (json_ctx_t *ctx, int ret)
    const stats_t *s = &ctx->stats;
 
    printf("{\"event\":\"result\",\"status\":%d,\"canceled\":%s,"
-          "\"packets\":%lu,\"encrypted\":%lu,\"decrypted\":%lu,"
+          "\"packets\":%lu,\"total\":%lu,\"encrypted\":%lu,\"decrypted\":%lu,"
           "\"passthrough\":%lu,\"dropped\":%lu,\"corrupt\":%lu,"
           "\"syncs\":%lu,\"resyncs\":%lu,\"seconds\":%.3f,"
           "\"mib_per_second\":%.2f,\"message\":\"",
           ret, s->canceled ? "true" : "false",
-          s->total_packets, s->encrypted_packets, s->decrypted_packets,
+          s->total_packets, ctx->total_packets,
+          s->encrypted_packets, s->decrypted_packets,
           s->passthrough_packets, s->dropped_packets, s->corrupt_packets,
           s->sync_count, s->resync_count, secs,
           secs > 0 ? (double) s->total_packets * PCKTSIZE / secs / 1048576.0 : 0);
@@ -423,7 +424,7 @@ int main (int argc, char **argv)
 
       memset(&ctx, 0, sizeof(ctx));
       ctx.started = now_seconds_public();
-      ctx.total_packets = (int) tsdec_packet_count(ifile);
+      ctx.total_packets = tsdec_packet_count(ifile);
 
       tsdec_job_init(&job);
       job.ifile = ifile;
