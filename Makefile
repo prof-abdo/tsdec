@@ -66,7 +66,13 @@ CSA_SRC  = src/csa.c \
 
 OBJS := $(patsubst src/%.c,obj/%.o,$(subst src/dvbcsa/,src/dvbcsa/,$(CORE_SRC)))
 
-obj/%.o : src/%.c
+# Every object depends on the headers, not just the matching source file.
+# Without this, editing a header leaves stale objects behind and the next
+# build quietly ships the old behaviour, which is how a version bump ended up
+# reported as 1.0 after the constant had already been changed to 2.0.
+HEADERS := $(wildcard src/*.h) $(wildcard src/dvbcsa/*.h)
+
+obj/%.o : src/%.c $(HEADERS)
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c -o $@ $<
 

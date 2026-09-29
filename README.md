@@ -3,7 +3,7 @@
 Decrypts recorded DVB transport stream files (`*.ts`) using control words
 logged elsewhere, with the common scrambling algorithm.
 
-Version 1.0. Based on TSDEC V0.4.1 by ganymede, which in turn grew out of
+Version 2.0. Based on TSDEC V0.4.1 by ganymede, which in turn grew out of
 cwldec. The CSA engine and the FFdecsa bitslice implementation come from
 libdvbcsa (Alexandre Becoulet), bundled under `src/dvbcsa`.
 
@@ -120,6 +120,25 @@ longer than that. `-b 0` turns the protection off.
 
 Messages go to stderr, so `2>log.txt` captures them and stdout stays clean for
 piping.
+
+### Migrating from 1.0
+
+Nothing you already scripted breaks. `-f`, `-i`, `-o`, `-e`, `-d`, `-a`, `-b`,
+`-v` and `-h` keep their meaning, and 1.0 accepted `-n` without doing anything
+with it, which 2.0 still tolerates.
+
+What changed is the output, in two ways worth knowing about:
+
+- 1.0 quit with "control word log too short" once the log ran out. 2.0 reports
+  the packet where the log stopped and keeps going, which fixes recordings with
+  long logs and makes a short log obvious instead of fatal.
+- 1.0 cleared the transport scrambling bits with a mask that also wiped the
+  adaptation field control and the continuity counter. Decrypted output is now
+  correct in those bits too, so a byte comparison against 1.0 output will differ
+  on the 4th byte of every scrambled packet while the payload is identical.
+
+The Win32 GUI of 0.4.1 has no equivalent here; the command line tool is the
+supported interface.
 
 ### Examples
 
