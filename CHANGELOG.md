@@ -4,7 +4,7 @@ All notable changes to TSDEC are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project uses
 [semantic versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.1.0] - 2026-09-29
 
 ### Added
 
@@ -23,6 +23,10 @@ Behaviour worth spelling out: on a stop the scout stops planning but the
 workers drain what is already in the ring. Raising a shared stop flag would
 have abandoned blocks that were planned and possibly decrypted but not yet
 written, cutting the output at an arbitrary packet.
+
+Verified by three new checks in the suite: cancelling at one and at eight
+threads returns the cancelled status, leaves packet aligned output, and what
+was written before the stop is byte identical to the plaintext.
 
 ## [2.0.0] - 2026-09-29
 
@@ -104,4 +108,5 @@ The first release under this repository. Based on TSDEC V0.4.1 by ganymede.
 - The stale Visual Studio project files, which referenced sources that no
   longer exist, were removed.
 
+[2.1.0]: https://github.com/prof-abdo/tsdec/releases/tag/v2.1.0
 [2.0.0]: https://github.com/prof-abdo/tsdec/releases/tag/v2.0.0
