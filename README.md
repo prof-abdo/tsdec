@@ -291,10 +291,13 @@ arguments are rejected.
   work to the PIDs you care about.
 - A corrupt transport stream stops the run unless `-r` is given, in which case
   the damaged packets are copied through.
-- A control word log that stops before the stream does leaves the remainder
+- A control word log that stops before the stream ends leaves the remainder
   scrambled; there is nothing to decrypt it with.
-- No GUI. V0.4.1 shipped a Win32 front end; the command line tool here is the
-  supported interface.
+- No GUI ships here. V0.4.1 had a Win32 front end; it was not carried over,
+  because it exposed almost none of what the command line can now do. A
+  replacement is being built separately in
+  [tsdec-gui](https://github.com/prof-abdo/tsdec-gui), which drives this
+  binary through its command line rather than duplicating any of this code.
 
 ## Licence
 
