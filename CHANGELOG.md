@@ -4,6 +4,47 @@ All notable changes to TSDEC are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project uses
 [semantic versioning](https://semver.org/).
 
+## [2.2.0] - 2026-09-29
+
+### Added
+
+- **A machine readable mode.** `tsdec --json` writes one JSON object per line on
+  stdout and nothing else there: `progress` events while it works, then a single
+  `result` event with the counts, the status code and a sentence saying what
+  happened. This is what a front end should read. Parsing the human log was
+  workable but it was never a contract, and it was not even reliably line
+  separated, see below.
+- `tsdec_status_text()` so the command line and `--json` describe a return code
+  with the same words. A front end no longer has to invent its own wording.
+- `percent` on every progress event, so a client does not have to recompute it.
+
+### Fixed
+
+- **Log lines ran into each other.** `tsdec_log()` never terminated the line,
+  so every message about an analysis, a pid survey or a summary came out as one
+  long run of text. It was invisible on a terminal, where the eye reconnects
+  the pieces, but a pipe got a single unparsable line, which is exactly how a
+  front end reads it. The line ending is now added where it belongs.
+- **Ctrl+C was ignored under Windows when the process was started in its own
+  process group.** A parent that creates `CREATE_NEW_PROCESS_GROUP`, which is
+  the normal way to send a control event to a child alone, also switches
+  Ctrl+C off for that child. The signal handler is now installed after
+  re-enabling it, so a stop from a parent behaves like a stop from a keyboard.
+- **Throughput and ETA were wrong on multi core runs.** Both were measured
+  with `clock()`, which counts processor time rather than elapsed time, so on
+  every unix a run on eight threads was timed as if it had taken eight times
+  longer than it did, understating the rate by the same factor. On Windows the
+  CRT happens to return elapsed time, which is why this went unnoticed. The
+  timing is now a real monotonic clock on both.
+
+### Changed
+
+- `make test` now runs the cancellation test. It was built and then never
+  executed, so the stop path had no coverage in the test target at all. The
+  test also generates its own recording instead of expecting one to be lying
+  around, and it is large enough that the stop lands mid run on a fast machine
+  rather than after the work is already done.
+
 ## [2.1.0] - 2026-09-29
 
 ### Added
@@ -108,5 +149,6 @@ The first release under this repository. Based on TSDEC V0.4.1 by ganymede.
 - The stale Visual Studio project files, which referenced sources that no
   longer exist, were removed.
 
+[2.2.0]: https://github.com/prof-abdo/tsdec/releases/tag/v2.2.0
 [2.1.0]: https://github.com/prof-abdo/tsdec/releases/tag/v2.1.0
 [2.0.0]: https://github.com/prof-abdo/tsdec/releases/tag/v2.0.0

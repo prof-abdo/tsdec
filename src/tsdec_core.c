@@ -16,6 +16,12 @@
  */
 
 #define _FILE_OFFSET_BITS 64
+/* clock_gettime() and CLOCK_MONOTONIC are POSIX.1-2001, and macOS hides them
+ * behind this macro, where the only alternative is the older
+ * gettimeofday(). Define it before any header is pulled in. */
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -67,6 +73,12 @@ void tsdec_clear_cancel (void)
 int tsdec_install_sigint_handler (void)
 {
 #ifdef _WIN32
+   /* Windows turns Ctrl+C off for any process that was started with
+    * CREATE_NEW_PROCESS_GROUP, which is exactly what a parent does so it can
+    * target this child without hitting itself. Turn it back on, otherwise the
+    * control event terminates us outright and whatever was already decrypted
+    * is lost. Harmless when we were not started as a group leader. */
+   SetConsoleCtrlHandler(NULL, FALSE);
    return signal(SIGINT, on_sigint) == SIG_ERR ? -1 : 0;
 #else
    struct sigaction sa;
@@ -80,15 +92,54 @@ int tsdec_install_sigint_handler (void)
 #endif
 }
 
+const char *tsdec_status_text (int ret)
+{
+   switch (ret)
+   {
+      case RET_OK:
+         return "done";
+      case RET_INFILE_NOTOPEN:
+         return "the recording could not be opened";
+      case RET_CWLOPEN:
+         return "the control word log could not be read";
+      case RET_OUTFILEOPEN:
+         return "the output file could not be written";
+      case RET_NOSYNC:
+         return "could not sync the control word log to this recording";
+      case RET_TSCORRUPT:
+         return "the recording is too damaged to read";
+      case RET_NOTCRYPTED:
+         return "the recording holds no encrypted packets";
+      case RET_EOF:
+         return "unexpected end of file";
+      case RET_CANCELED:
+         return "stopped on request, the work already done was kept";
+      case RET_SELFTESTFAILED:
+         return "the cipher self test failed";
+      case RET_USAGE:
+         return "bad command line";
+      default:
+         return "failed";
+   }
+}
+
 void tsdec_log (int level, const char *fmt, ...)
 {
    va_list ap;
+
    if (level > g_verbose)
       return;
+
    fprintf(stderr, "TSDEC: ");
    va_start(ap, fmt);
    vfprintf(stderr, fmt, ap);
    va_end(ap);
+
+   /* Callers do not spell out the line ending, so it is added here. Without
+    * this every message runs into the next one, which is invisible on a
+    * terminal but makes the output unparsable when it is a pipe, which is
+    * exactly how a front end reads it. */
+   fputc('\n', stderr);
 }
 
 /* ------------------------------------------------------------------ *
@@ -372,11 +423,36 @@ static size_t reader_fill (reader_t *r)
    return got;
 }
 
-/* clock() is the only clock available in the Windows CRT and is good enough
- * here: we only report a throughput figure, not a deadline. */
+/* Wall clock, because everything derived from it is user facing: the
+ * throughput figure and the estimate of how much is left.
+ *
+ * clock() is the trap here. It returns processor time, so on POSIX it sums
+ * across every worker thread: an eight thread run that takes a second of real
+ * time would be reported as eight, and the throughput would come out roughly
+ * eight times too low with a wildly wrong ETA. The Windows CRT happens to
+ * return wall clock time, which is why the bug hides on one platform only. */
 static double now_seconds (void)
 {
+#ifdef _WIN32
+   /* QPC is monotonic and unaffected by the wall clock being adjusted. It is
+    * already the performance counter that GetTickCount reads underneath, so
+    * there is no need for the older coarser fallback. */
+   static LARGE_INTEGER freq;
+   LARGE_INTEGER now;
+
+   if (freq.QuadPart == 0)
+      QueryPerformanceFrequency(&freq);
+   QueryPerformanceCounter(&now);
+   return (double) now.QuadPart / (double) freq.QuadPart;
+#else
+   struct timespec ts;
+
+   if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+      return (double) ts.tv_sec + (double) ts.tv_nsec / 1e9;
+
+   /* very old or exotic unix without clock_gettime */
    return (double) clock() / (double) CLOCKS_PER_SEC;
+#endif
 }
 
 double now_seconds_public (void)
@@ -1254,7 +1330,6 @@ int tsdec_run (const tsdec_job_t *job, stats_t *stats)
                 stats->total_packets * PCKTSIZE / 1048576.0);
       return ret;
    }
-
    if (ret == RET_OK && stats->encrypted_packets && stats->sync_count == 0)
    {
       tsdec_log(2, "could not sync the control word log to this recording");

@@ -196,11 +196,12 @@ static void json_progress (void *user, unsigned long done,
    double eta = (mbps > 0 && total > done)
                 ? ((double) (total - done) * PCKTSIZE / 1048576.0) / mbps : -1;
 
-   printf("{\"event\":\"progress\",\"done\":%lu,\"total\":%lu,"
-          "\"seconds\":%.3f,\"mib_per_second\":%.2f,\"eta\":%.1f,"
-          "\"encrypted\":%lu,\"decrypted\":%lu,\"syncs\":%lu}\n",
-          done, total, secs, mbps, eta,
-          st->encrypted_packets, st->decrypted_packets, st->sync_count);
+    printf("{\"event\":\"progress\",\"done\":%lu,\"total\":%lu,"
+           "\"percent\":%.1f,\"seconds\":%.3f,\"mib_per_second\":%.2f,"
+           "\"eta\":%.1f,"
+           "\"encrypted\":%lu,\"decrypted\":%lu,\"syncs\":%lu}\n",
+           done, total, pct, secs, mbps, eta,
+           st->encrypted_packets, st->decrypted_packets, st->sync_count);
    fflush(stdout);
 }
 
@@ -213,12 +214,14 @@ static void json_result (json_ctx_t *ctx, int ret)
           "\"packets\":%lu,\"encrypted\":%lu,\"decrypted\":%lu,"
           "\"passthrough\":%lu,\"dropped\":%lu,\"corrupt\":%lu,"
           "\"syncs\":%lu,\"resyncs\":%lu,\"seconds\":%.3f,"
-          "\"mib_per_second\":%.2f}\n",
+          "\"mib_per_second\":%.2f,\"message\":\"",
           ret, s->canceled ? "true" : "false",
           s->total_packets, s->encrypted_packets, s->decrypted_packets,
           s->passthrough_packets, s->dropped_packets, s->corrupt_packets,
           s->sync_count, s->resync_count, secs,
           secs > 0 ? (double) s->total_packets * PCKTSIZE / secs / 1048576.0 : 0);
+   json_escape(tsdec_status_text(ret));
+   printf("\"}\n");
    fflush(stdout);
 }
 

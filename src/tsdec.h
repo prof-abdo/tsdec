@@ -3,7 +3,7 @@
 #ifndef TSDEC_H
 #define TSDEC_H
 
-#define TSDEC_VERSION "2.1"
+#define TSDEC_VERSION "2.2"
 
 #define PCKTSIZE 188
 
@@ -49,7 +49,6 @@ void tsdec_clear_cancel (void);
 /* Install a handler so that Ctrl+C asks for a stop instead of killing the
  * process mid write. Returns 0 on success. */
 int tsdec_install_sigint_handler (void);
-
 typedef struct
 {
    const char     *ifile;
@@ -102,6 +101,10 @@ typedef enum {
    RET_USAGE,
    RET_BATCH
 } tenReturnValue;
+
+/* Short sentence describing a return code, in English. Shared by the command
+ * line and by --json so a front end never has to invent its own wording. */
+const char *tsdec_status_text (int ret);
 
 /* control word log */
 int  cwl_load (const char *name, cwl_t *out, int fix_checksums, int verbose);

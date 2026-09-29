@@ -33,11 +33,11 @@ static void *canceller_main (void *arg)
 
 int main (int argc, char **argv)
 {
-   const char *ifile = argc > 1 ? argv[1] : "test/huge.enc.ts";
-   const char *cwl  = argc > 2 ? argv[2] : "test/huge.cwl";
-   const char *ofile = argc > 3 ? argv[3] : "test/cancel_out.ts";
+   const char *ifile = argc > 1 ? argv[1] : "test/cancel.enc.ts";
+   const char *cwl  = argc > 2 ? argv[2] : "test/cancel.cwl";
+   const char *ofile = argc > 3 ? argv[3] : "test/cancel.out.ts";
    int nworkers = argc > 4 ? atoi(argv[4]) : 1;
-   unsigned long delay = argc > 5 ? strtoul(argv[5], NULL, 10) : 600;
+   unsigned long delay = argc > 5 ? strtoul(argv[5], NULL, 10) : 200;
    cwl_t log;
    tsdec_job_t job;
    stats_t stats;

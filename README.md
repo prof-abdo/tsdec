@@ -3,7 +3,7 @@
 Decrypts recorded DVB transport stream files (`*.ts`) using control words
 logged elsewhere, with the common scrambling algorithm.
 
-Version 2.0. Based on TSDEC V0.4.1 by ganymede, which in turn grew out of
+Version 2.2. Based on TSDEC V0.4.1 by ganymede, which in turn grew out of
 cwldec. The CSA engine and the FFdecsa bitslice implementation come from
 libdvbcsa (Alexandre Becoulet), bundled under `src/dvbcsa`.
 
@@ -140,6 +140,36 @@ The stop is noticed between blocks, a block being about a megabyte, so it takes
 effect within a fraction of a second rather than instantly. A stop in the
 threaded path drains the blocks already in flight instead of abandoning them,
 which is why the output never ends mid frame.
+
+### Driving it from a program
+
+`--json` turns the output into a line protocol: one JSON object per line on
+stdout, and the human log stays on stderr where it does not interfere. A front
+end should read this rather than scraping the log.
+
+```sh
+tsdec --json -f log.cwl -i recording.ts -o clear.ts
+```
+
+Progress arrives a few times a second, the last one before the work is done:
+
+```json
+{"event":"progress","done":245745,"total":1500000,"percent":16.4,"seconds":0.31,"mib_per_second":132.10,"eta":2.24,"encrypted":243318,"decrypted":245745,"syncs":1}
+```
+
+Then exactly one result, and the process exits with the same number as `status`:
+
+```json
+{"event":"result","status":0,"canceled":false,"packets":1500000,"encrypted":1486377,"decrypted":1500000,"passthrough":13623,"dropped":0,"corrupt":0,"syncs":1,"resyncs":0,"seconds":2.11,"mib_per_second":47.74,"message":"done"}
+```
+
+`status` is `0` on success and `55` when stopped on request, in which case the
+`message` says so and the partial output has been kept. To stop it from a
+parent, send a console control event on Windows or `SIGINT` elsewhere; see
+[Stopping](#stopping).
+
+The event names, the fields and the status codes are the interface. They are
+what [tsdec-gui](https://github.com/prof-abdo/tsdec-gui) is built on.
 
 ### Migrating from 1.0
 

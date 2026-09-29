@@ -99,8 +99,19 @@ bench_csa: tools/bench_csa.c $(CSA_SRC)
 cancel_test: tools/cancel_test.c $(LIB_SRC)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-test: csa_selftest cancel_test tsdec
+PYTHON ?= python
+
+# the cancellation test needs a recording big enough that one worker cannot
+# finish it before the stop lands, so it builds its own on demand
+test/cancel.enc.ts: tools/mk_ts.py tools/mk_test_pair.py tsdec
+	mkdir -p test
+	$(PYTHON) tools/mk_ts.py -o test/cancel.plain.ts -n 1500000 -s 7
+	$(PYTHON) tools/mk_test_pair.py -i test/cancel.plain.ts \
+		-o test/cancel.enc.ts -c test/cancel.cwl -t ./tsdec -w 20000 --quiet
+
+test: csa_selftest cancel_test tsdec test/cancel.enc.ts
 	./csa_selftest
+	./cancel_test
 
 bench: bench_csa
 	./bench_csa

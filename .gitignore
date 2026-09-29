@@ -9,3 +9,7 @@
 # test artefacts
 /test/
 cancel_log.txt
+cancel_test
+cancel_test.exe
+*.log
+
