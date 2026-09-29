@@ -1,0 +1,54 @@
+#!/bin/sh
+#
+#                    >>>> movecwl  V1.0 <<<<       by ganymede
+#
+# This script moves *.cwl files from the oscam cwlogdir to another directory or
+# to an ftp server
+#
+# Every cwl files starts with the date it was recorded in the form
+# YYMMDD_xxxxxxxx.cwl, e.g. 101231_xxxxxxxx.cwl
+# First this script searches all cwl files that are from yesterday or older e.g.
+# 101230_*.cwl, 101229_*.cwl,.....
+# Cwl files from today are left untouched because they are still growing while
+# oscam writes to them. Choose one option to move the files.
+#
+
+# source directory for cwls
+CWLOGDIR="/var/log/oscam/cw"
+# destination directory
+CWLDEST="/var/log/oscam/cwlarchive"
+
+echo "moving cwl files..."
+# we calculate a YYMMDD string from today
+YYMMDD=`date "+%y%m%d"`
+# and get a list of cwl files (with full path) which are from yesterday or older
+CWLS=`ls $CWLOGDIR/*.cwl|grep -v $YYMMDD`
+
+mkdir $CWLDEST 2>/dev/null
+for CWL in $CWLS
+do
+   echo "$CWL"
+
+   #   ########## move old cwls to folder structure YY/MM/DD/file.cwl
+   #Y=`echo $CWL|cut -c 1-2`
+   #M=`echo $CWL|cut -c 3-4`
+   #D=`echo $CWL|cut -c 5-6`
+   #mkdir $CWLDEST/$Y 2>/dev/null
+   #mkdir $CWLDEST/$Y/$M 2>/dev/null
+   #mkdir $CWLDEST/$Y/$M/$D 2>/dev/null
+   #mv $CWL $CWLDEST/$Y/$M/$D/
+
+   ########## upload each cwl to ftp server with busybox ftpput
+   #ftpput --server=cwlserver.dyndns.org --user=stanley --pass=swordfish $CWL
+
+   ########## upload each cwl to ftp server with busybox wput
+   #wput $CWL ftp://username:password@cwlserver.dyndns.org:21/cwlogs
+
+   ########## move each old cwl file to temp dir first
+   mv "$CWL" $CWLDEST
+done
+
+########## pack all cwls to one tar file and upload it
+#tar -c -f cwls.tar cwl
+#ftpput --server=cwlserver.dyndns.org --user=stanley --pass=swordfish cwls.tar
+#wput cwls.tar ftp://username:password@cwlserver.dyndns.org:21/cwlogs

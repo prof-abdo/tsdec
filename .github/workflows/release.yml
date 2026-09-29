@@ -1,0 +1,122 @@
+name: release
+
+# Build the release binaries and attach them to a GitHub release.
+#
+# Pushing a v* tag is what starts this. The build job reuses the same steps as
+# the CI workflow so a release can never ship something the tests did not pass.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: existing tag to build a release for
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: tsdec-linux-x86_64
+            binary: tsdec
+          - os: macos-latest
+            artifact: tsdec-macos-arm64
+            binary: tsdec
+          - os: windows-latest
+            artifact: tsdec-windows-x86_64
+            binary: tsdec.exe
+            msys: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Only the manual dispatch needs to be told which tag it is building;
+      # on a tag push GITHUB_REF_NAME already is the tag.
+      - name: Check out the requested tag
+        if: github.event_name == 'workflow_dispatch'
+        run: git fetch --tags && git checkout "${{ inputs.tag }}"
+
+      - name: Install toolchain (Windows)
+        if: matrix.msys
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-make
+            python
+
+      - name: Build and test (unix)
+        if: ${{ !matrix.msys }}
+        shell: bash
+        run: |
+          make clean
+          make
+          make test
+          chmod +x tools/run_tests.sh && tools/run_tests.sh ./tsdec
+
+      - name: Build and test (Windows)
+        if: matrix.msys
+        shell: msys2 {0}
+        run: |
+          make clean
+          make
+          make test
+          chmod +x tools/run_tests.sh
+          PYTHON=python tools/run_tests.sh ./tsdec.exe
+
+      - name: Package
+        shell: bash
+        run: |
+          set -eu
+          mkdir -p dist
+          cp README.md LICENSE dist/ 2>/dev/null || cp README.md dist/
+          cp "${{ matrix.binary }}" "dist/${{ matrix.artifact }}$( [ "${{ matrix.os }}" = "windows-latest" ] && echo '.exe' )"
+          cd dist
+          tar czf "${{ matrix.artifact }}.tar.gz" "${{ matrix.artifact }}"* README.md
+          # a bare binary next to the archive, for anyone who just wants the file
+          cp "${{ matrix.artifact }}"* ./
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect every platform build
+        uses: actions/download-artifact@v4
+        with:
+          path: staging
+          merge-multiple: true
+
+      - name: Build the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          draft: true
+          files: |
+            staging/*.tar.gz
+            staging/tsdec
+            staging/tsdec.exe

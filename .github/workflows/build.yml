@@ -1,0 +1,91 @@
+name: build
+
+# Build plus the full test suite on every supported platform.
+#
+# The suite is not cosmetic: it cross checks the bitsliced CSA engine against
+# the scalar one bit for bit, then round trips synthetic transport streams. A
+# green run means the fast path produces exactly what the reference produces.
+
+on:
+  push:
+    branches: [master, main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unix:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show the toolchain the Makefile will pick
+        run: |
+          echo "uname : $(uname -s)"
+          echo "cc    : $(cc -dumpmachine)"
+
+      - name: Build and unit test
+        run: |
+          make clean
+          make
+          make test
+
+      - name: End to end tests
+        run: chmod +x tools/run_tests.sh && tools/run_tests.sh ./tsdec
+
+      - name: Throughput reference
+        run: make bench
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsdec-${{ matrix.os }}
+          path: tsdec
+          if-no-files-found: error
+
+  windows:
+    name: windows x64
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-make
+            python
+
+      - name: Build and unit test
+        run: |
+          make clean
+          make
+          make test
+
+      - name: End to end tests
+        run: |
+          chmod +x tools/run_tests.sh
+          PYTHON=python tools/run_tests.sh ./tsdec.exe
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsdec-windows
+          path: tsdec.exe
+          if-no-files-found: error

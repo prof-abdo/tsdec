@@ -1,0 +1,39 @@
+>> How to log control words with oscam <<
+
+
+What are control word log (CWL) files?
+
+A control word is the data, a pay-tv smardcard sends to the receiver in order to 
+decrypt a channel. CWs are the lowest level keys needed to decrypt the raw mpeg 
+data (transport stream). Pay-tv providers change the cws usually after some 
+seconds see also http://en.wikipedia.org/wiki/Common_Scrambling_Algorithm
+
+
+Setup oscam for cw logging
+
+open oscam.conf, go to the section [global] and find the cwlogdir entry
+cwlogdir      = /var/log/oscam/cw
+enter an existing directory with sufficient free space. Oscam will not create the
+directoy for you if it does not exist! Make sure there is enough free space on 
+this drive. CWL file size is up to 400KB (at 10 seconds key change rate).
+In this example the cwl are stored like /var/log/oscam/cw/101231_CHANNELxyz.cwl
+Do not add the trailing '/' to cwlogdir, oscam appends this internally.
+Make sure the channels you want to log are listed in oscam.srvid for correct file
+names. If cwlogdir is activated, oscam starts logging all cws, no matter if they
+come from cardreaders or via forwarding.
+
+What to do with logfiles?
+
+Other people need the logfiles if they want to decrypt a recorded channel later.
+You can send the logfile to another person manually. A better way is to upload 
+the logfiles to a web site automatically, say once a day. As the logfile grows 
+constantly during one day it makes sense to upload or move it the day after. 
+For example when you move the files from may 5th on may 6th at 0:05 the old files
+are not changed any more.
+Best practice is to copy the files by a cron job. Some small linux systems lack 
+cron and therefore you can use the bash script "daily" instead. It starts the 
+script "movecwl" once a day. Movecwl can move the files to an ftp server, gzip
+them or sort them, have a look at the script.
+
+Happy sharing.
+

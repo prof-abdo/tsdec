@@ -1,0 +1,96 @@
+#!/bin/sh
+#################################################################################
+#
+# CWlog  control word log
+#
+# CWLog reads the /tmp/ecm.info file repeatedly and writes the CWs to
+# a CWL file for offline decryption.
+#
+# V1.0   08-12-07    initial release
+# V1.1   08-12-17    replacement of CWx: case insensitive
+# V1.2   09-01-11    alternating order of CW parity at start of log file
+# V1.3   10-08-30    replace spaces in file names + removed delta seconds
+#
+#################################################################################
+
+VER='CWlog V1.3'
+
+IN="/tmp/ecm.info"
+CWLOGDIR="/tmp"
+POLLTIME=1
+
+
+LINE1=""
+FROM=""
+CW0=""
+CW1=""
+LASTLINE1=""
+LASTCW0=""
+LASTCW1=""
+
+echo $VER": logging started"
+
+while [ 1 ]
+do
+   if [ -e $IN ] ; then
+      # access to $IN file is not atomic (yet)
+      LINE1=`sed -e '1qd' <$IN`
+      CW0=`sed -e '3qd' <$IN`
+      CW1=`sed -e '4qd' <$IN`
+
+      if [ "$LASTLINE1" != "$LINE1" ] ; then
+         # 1st line of ecm.info has changed, we start a new logging file now
+         wget -O /tmp/mylist http://127.0.0.1/control/channellist   2>/dev/null
+         wget -O /tmp/mych http://127.0.0.1/control/zapto           2>/dev/null
+         read myid < /tmp/mych
+         grep $myid /tmp/mylist > /tmp/mypair
+         read junk CHANNEL < /tmp/mypair
+         rm /tmp/mypair
+         rm /tmp/mych
+         rm /tmp/mylist
+
+         #calculate new cwl file name
+         CHANNEL=`echo $CHANNEL|sed -e "s/ /_/g"`
+         OUT=`date +"$CWLOGDIR/%y%m%d_$CHANNEL.cwl"`
+
+         LASTLINE1=$LINE1
+         # the 1st two CWs cannot be written until parity of the 3rd is known
+         # make the CW change detection fail for the first time
+         LASTCW0=$CW0
+         LASTCW1=$CW1
+         INITIALCW=1
+         date +"# $VER - logging of $CHANNEL started at: %D %T"  >>$OUT
+         echo "# $LINE1"  >>$OUT
+      fi
+
+      if [ "$LASTCW0" != "$CW0" ] || [ "$LASTCW1" != "$CW1" ] ; then
+
+         if [ "$LASTCW0" != "$CW0" ] ; then
+            #echo "new CW0 detected"
+            if [ "$INITIALCW" != 0 ] ; then
+               # even CW did change first, -> CW order: 0,1,0
+               echo $LASTCW0|sed s/CW0:/0/I >>$OUT
+               echo $LASTCW1|sed s/CW1:/1/I >>$OUT
+               INITIALCW=0;
+            fi
+            LASTCW0=$CW0
+            CW0=`echo $CW0|sed s/CW0:/0/I`
+            date +"$CW0 # %T"  >>$OUT  # this is current time and not time of $IN
+         fi
+         if [ "$LASTCW1" != "$CW1" ]  ; then
+            #echo "new CW1 detected"
+            if [ "$INITIALCW" != 0 ] ; then
+               # odd CW did change first, -> CW order: 1,0,1
+               echo $LASTCW1|sed s/CW1:/1/I >>$OUT
+               echo $LASTCW0|sed s/CW0:/0/I >>$OUT
+               INITIALCW=0;
+            fi
+            LASTCW1=$CW1
+            CW1=`echo $CW1|sed s/CW1:/1/I`
+            date +"$CW1 # %T"  >>$OUT  # this is current time and not time of $IN
+         fi
+      fi # CW0 or CW1 changed
+   fi # if [ -e $IN ]
+   sleep $POLLTIME
+done    # while
+

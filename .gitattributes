@@ -1,0 +1,23 @@
+# Normalise line endings so a checkout on any platform produces files that
+# actually run. The shell and perl helpers under logging_howto are plain text
+# scripts: with CRLF endings the kernel refuses to execute them on Linux, and
+# the CI would fail on the first line.
+
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.pl   text eol=lf
+*.py   text eol=lf
+Makefile text eol=lf
+
+*.c    text eol=lf
+*.h    text eol=lf
+
+*.yml  text eol=lf
+*.cwl  text eol=lf
+*.md   text eol=lf
+
+# binary, must never be touched
+*.ts   binary
+*.ico  binary
+*.exe  binary

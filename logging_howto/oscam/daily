@@ -1,0 +1,32 @@
+#!/bin/sh
+# 
+# this script executes a certain program once a day 
+# it is written for thin linux systems (like busybox) without cron
+#
+#
+
+#############################################################
+# enter time here when command shall be executed
+WAKETIME="00:03" 
+#############################################################
+
+echo "daily: starting"
+while [ 1 ]
+do
+   TIME2=`date -d $WAKETIME +%s`
+   TIME1=`date +%s`
+   if [ $TIME2 -gt $TIME1 ] ; then 
+      SLEEPTIME=`expr $TIME2 - $TIME1`
+   else
+      SLEEPTIME=`expr $TIME2 + 86400 - $TIME1`
+   fi
+   echo "daily: sleeping $SLEEPTIME seconds until $WAKETIME"
+   sleep $SLEEPTIME
+   echo "daily: running command..."
+
+   #############################################################
+   # enter command here
+   movecwl
+   #############################################################
+  
+done

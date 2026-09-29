@@ -1,0 +1,10 @@
+# build output
+*.o
+*.obj
+*.exe
+/tsdec
+/csa_selftest*
+/bench_csa*
+
+# test artefacts
+/test/
