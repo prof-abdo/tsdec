@@ -23,12 +23,62 @@
 #include <string.h>
 #include <ctype.h>
 #include <time.h>
+#include <signal.h>
 
 #include "csa.h"
 #include "tsdec.h"
 #include "thread.h"
 
 int g_verbose = 2;
+
+/* ------------------------------------------------------------------ *
+ * cancellation
+ * ------------------------------------------------------------------ *
+ *
+ * The flag is written from a signal handler, so it has to be a plain
+ * sig_atomic_t rather than anything atomic-aware. The job polls it between
+ * blocks, which is where the responsiveness actually comes from: a block is
+ * about a megabyte, so the worst case is the time to finish the block in
+ * flight rather than the time to drain a queue.
+ */
+static volatile sig_atomic_t g_cancel = 0;
+
+static void on_sigint (int sig)
+{
+   (void) sig;
+   g_cancel = 1;
+}
+
+void tsdec_request_cancel (void)
+{
+   g_cancel = 1;
+}
+
+int tsdec_cancel_requested (void)
+{
+   return g_cancel != 0;
+}
+
+void tsdec_clear_cancel (void)
+{
+   g_cancel = 0;
+}
+
+int tsdec_install_sigint_handler (void)
+{
+#ifdef _WIN32
+   return signal(SIGINT, on_sigint) == SIG_ERR ? -1 : 0;
+#else
+   struct sigaction sa;
+
+   memset(&sa, 0, sizeof(sa));
+   sa.sa_handler = on_sigint;
+   sigemptyset(&sa.sa_mask);
+   /* no SA_RESTART: a blocking read should come back so the poll happens */
+   sa.sa_flags = 0;
+   return sigaction(SIGINT, &sa, NULL) == 0 ? 0 : -1;
+#endif
+}
 
 void tsdec_log (int level, const char *fmt, ...)
 {
@@ -329,6 +379,41 @@ static double now_seconds (void)
    return (double) clock() / (double) CLOCKS_PER_SEC;
 }
 
+/* How many whole packets the input holds. Used to turn "x packets done" into a
+ * percentage and an estimate. Returns 0 if the size cannot be determined. */
+static unsigned long reader_packet_count (const char *path)
+{
+   FILE *f;
+   long long size;
+   unsigned long count;
+
+   if (!(f = fopen(path, "rb")))
+      return 0;
+
+#if defined(_WIN32)
+   {
+      __int64 pos = _ftelli64(f);
+      if (_fseeki64(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
+      size = (long long) _ftelli64(f);
+      _fseeki64(f, pos, SEEK_SET);
+   }
+#else
+   {
+      off_t pos = ftello(f);
+      if (fseeko(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
+      size = (long long) ftello(f);
+      fseeko(f, pos, SEEK_SET);
+   }
+#endif
+
+   fclose(f);
+   if (size <= 0)
+      return 0;
+
+   count = (unsigned long) (size / PCKTSIZE);
+   return count;
+}
+
 static void report_stats (const stats_t *s, double secs)
 {
    double mbps = secs > 0 ? (double) s->total_packets * PCKTSIZE / secs / 1048576.0 : 0;
@@ -563,6 +648,12 @@ typedef struct
    int           npid_filter;
    int           nworkers;
 
+   /* progress reporting, both polled from the scout */
+   unsigned long total_packets;    /* 0 when the size is not known upfront */
+   unsigned long reported;
+   tsdec_progress_fn on_progress;
+   void         *progress_user;
+
    block_t      *slots;
    int           nslots;
 
@@ -577,6 +668,7 @@ typedef struct
    int           plan_done;
    int           stop;
    int           error;
+   int           canceled;
 
    stats_t       scout_stats;
    stats_t      *worker_stats;
@@ -724,19 +816,23 @@ static void *worker_main (void *arg)
  * or the caller asked for one worker. */
 static int decrypt_serial (const char *ifile, FILE *out, const cwl_t *cwl,
                            int verbose, int progress, const int *pid_filter,
-                           int npid_filter, stats_t *stats)
+                           int npid_filter, stats_t *stats,
+                           tsdec_progress_fn on_progress, void *progress_user)
 {
    reader_t r;
    csa_ctx_t *ctx;
    int *cw_of, *batch;
    int ret, synced = 0, cur_cw = -1, last_parity = -1;
    unsigned long reported = 0;
+   unsigned long total_packets = 0;
    size_t n;
    int i;
 
    ret = reader_open(&r, ifile, BLOCK_PACKETS);
    if (ret != RET_OK)
       return ret;
+
+   total_packets = reader_packet_count(ifile);
 
    ctx = csa_ctx_new();
    cw_of = malloc(sizeof(int) * BLOCK_PACKETS);
@@ -757,6 +853,13 @@ static int decrypt_serial (const char *ifile, FILE *out, const cwl_t *cwl,
 
    while ((n = reader_fill(&r)) > 0)
    {
+      if (tsdec_cancel_requested())
+      {
+         stats->canceled = 1;
+         ret = RET_CANCELED;
+         goto serial_done;
+      }
+
       plan_block(ctx, r.buf, n, cwl, cw_of, &synced, &cur_cw, &last_parity,
                  pid_filter, npid_filter, stats);
       decrypt_block(ctx, r.buf, n, cwl, cw_of, batch);
@@ -770,7 +873,16 @@ static int decrypt_serial (const char *ifile, FILE *out, const cwl_t *cwl,
 
       stats->total_packets += (unsigned long) n;
 
-      if (progress && stats->total_packets - reported >= 500000)
+      if (on_progress)
+      {
+         if (stats->total_packets - reported >= 100000 || total_packets == 0)
+         {
+            reported = stats->total_packets;
+            on_progress(progress_user, stats->total_packets, total_packets,
+                        stats);
+         }
+      }
+      else if (progress && stats->total_packets - reported >= 500000)
       {
          reported = stats->total_packets;
          tsdec_log(1, "... %lu packets (%.1f MiB)", stats->total_packets,
@@ -821,15 +933,33 @@ static void scout_main (pipeline_t *pl)
       size_t n;
       int stop = 0;
 
+      /* A stop request stops the scout from planning anything further, but the
+       * blocks already in the ring still have to be decrypted and written:
+       * dropping them would cut the output at an arbitrary packet and lose
+       * whatever was decoded but not yet flushed. So plan_done is raised and
+       * the workers drain, rather than setting stop and abandoning the ring. */
+      if (tsdec_cancel_requested())
+      {
+         mutex_lock(&pl->mutex);
+         pl->canceled = 1;
+         pl->plan_done = 1;
+         cond_broadcast(&pl->produced);
+         cond_broadcast(&pl->consumed);
+         mutex_unlock(&pl->mutex);
+         break;
+      }
+
       /* wait until the slot we want has been freed by the workers */
       mutex_lock(&pl->mutex);
-      while (pl->slots[index % pl->nslots].ready && !pl->stop)
+      while (pl->slots[index % pl->nslots].ready && !pl->stop
+             && !pl->canceled)
          cond_wait(&pl->consumed, &pl->mutex);
-      stop = pl->stop;
+      stop = pl->stop || pl->canceled;
       mutex_unlock(&pl->mutex);
 
       if (stop)
          break;
+
       n = reader_fill(&r);
       if (n == 0)
       {
@@ -857,7 +987,19 @@ static void scout_main (pipeline_t *pl)
       cond_broadcast(&pl->consumed);
       mutex_unlock(&pl->mutex);
 
-      if (pl->progress && pl->scout_stats.total_packets - reported >= 500000)
+      if (pl->on_progress)
+      {
+         unsigned long done = pl->scout_stats.total_packets;
+         /* not more than a few times a second: the callback may be doing
+          * something as costly as touching a socket */
+         if (done - pl->reported >= 100000 || pl->total_packets == 0)
+         {
+            pl->reported = done;
+            pl->on_progress(pl->progress_user, done, pl->total_packets,
+                            &pl->scout_stats);
+         }
+      }
+      else if (pl->progress && pl->scout_stats.total_packets - reported >= 500000)
       {
          reported = pl->scout_stats.total_packets;
          tsdec_log(1, "... %lu packets (%.1f MiB)", reported,
@@ -879,7 +1021,8 @@ static void scout_main (pipeline_t *pl)
 static int decrypt_parallel (const char *ifile, const char *ofile,
                              const cwl_t *cwl, int nworkers, int verbose,
                              int progress, const int *pid_filter,
-                             int npid_filter, stats_t *stats)
+                             int npid_filter, stats_t *stats,
+                             tsdec_progress_fn on_progress, void *progress_user)
 {
    pipeline_t pl;
    tsdec_thread_t *threads = NULL;
@@ -895,6 +1038,9 @@ static int decrypt_parallel (const char *ifile, const char *ofile,
    pl.pid_filter = pid_filter;
    pl.npid_filter = npid_filter;
    pl.nworkers = nworkers;
+   pl.on_progress = on_progress;
+   pl.progress_user = progress_user;
+   pl.total_packets = reader_packet_count(ifile);
 
    ret = open_output(ofile, &pl.out);
    if (ret != RET_OK)
@@ -1007,7 +1153,11 @@ static int decrypt_parallel (const char *ifile, const char *ofile,
    stats->corrupt_packets = pl.scout_stats.corrupt_packets;
    stats->dropped_packets = pl.scout_stats.dropped_packets;
    stats->resync_count = pl.scout_stats.sync_count
-                       ? pl.scout_stats.sync_count - 1 : 0;
+                        ? pl.scout_stats.sync_count - 1 : 0;
+   stats->canceled = pl.canceled;
+   if (pl.canceled && ret == RET_OK)
+      ret = RET_CANCELED;
+
 
    for (i = 0; i < pl.nslots; i++)
    {
@@ -1022,35 +1172,36 @@ static int decrypt_parallel (const char *ifile, const char *ofile,
    return ret;
 }
 
-int decrypt_cwl_file (const char *ifile, const char *ofile, const cwl_t *cwl,
-                      int cw_blocker, int verbose, int progress,
-                      const int *pid_filter, int npid_filter,
-                      int allow_resync, int nworkers, stats_t *stats)
+int tsdec_run (const tsdec_job_t *job, stats_t *stats)
 {
    int ret;
    double t0, t1;
 
    memset(stats, 0, sizeof(*stats));
 
-   if (cw_blocker > 0)
-      tsdec_log(3, "cw change blocker set to %d packets", cw_blocker);
+   if (job->cw_blocker > 0)
+      tsdec_log(3, "cw change blocker set to %d packets", job->cw_blocker);
 
    t0 = now_seconds();
 
-   if (nworkers > 1)
+   if (job->nworkers > 1)
    {
-      tsdec_log(3, "decrypting with %d worker threads", nworkers);
-      ret = decrypt_parallel(ifile, ofile, cwl, nworkers, verbose, progress,
-                             pid_filter, npid_filter, stats);
+      tsdec_log(3, "decrypting with %d worker threads", job->nworkers);
+      ret = decrypt_parallel(job->ifile, job->ofile, job->cwl, job->nworkers,
+                             job->verbose, job->progress, job->pid_filter,
+                             job->npid_filter, stats, job->on_progress,
+                             job->progress_user);
    }
    else
    {
       FILE *out;
-      ret = open_output(ofile, &out);
+      ret = open_output(job->ofile, &out);
       if (ret == RET_OK)
       {
-         ret = decrypt_serial(ifile, out, cwl, verbose, progress,
-                              pid_filter, npid_filter, stats);
+         ret = decrypt_serial(job->ifile, out, job->cwl, job->verbose,
+                              job->progress, job->pid_filter,
+                              job->npid_filter, stats, job->on_progress,
+                              job->progress_user);
          fflush(out);
          if (out != stdout)
             fclose(out);
@@ -1059,8 +1210,17 @@ int decrypt_cwl_file (const char *ifile, const char *ofile, const cwl_t *cwl,
 
    t1 = now_seconds();
 
-   if (verbose >= 1)
+   if (job->verbose >= 1)
       report_stats(stats, t1 - t0);
+
+   if (ret == RET_CANCELED)
+   {
+      tsdec_log(1, "stopped on request after %lu packets (%.1f MiB); the "
+                "partial output is left in place",
+                stats->total_packets,
+                stats->total_packets * PCKTSIZE / 1048576.0);
+      return ret;
+   }
 
    if (ret == RET_OK && stats->encrypted_packets && stats->sync_count == 0)
    {
@@ -1073,8 +1233,38 @@ int decrypt_cwl_file (const char *ifile, const char *ofile, const cwl_t *cwl,
       ret = RET_NOTCRYPTED;
    }
 
-   (void) allow_resync;
+   (void) job->allow_resync;
    return ret;
+}
+
+void tsdec_job_init (tsdec_job_t *job)
+{
+   memset(job, 0, sizeof(*job));
+   job->cw_blocker = 300;
+   job->verbose = 2;
+   job->nworkers = 0;              /* 0 means "work it out at run time" */
+}
+
+int decrypt_cwl_file (const char *ifile, const char *ofile, const cwl_t *cwl,
+                      int cw_blocker, int verbose, int progress,
+                      const int *pid_filter, int npid_filter,
+                      int allow_resync, int nworkers, stats_t *stats)
+{
+   tsdec_job_t job;
+
+   tsdec_job_init(&job);
+   job.ifile = ifile;
+   job.ofile = ofile;
+   job.cwl = cwl;
+   job.cw_blocker = cw_blocker;
+   job.verbose = verbose;
+   job.progress = progress;
+   job.pid_filter = pid_filter;
+   job.npid_filter = npid_filter;
+   job.allow_resync = allow_resync;
+   job.nworkers = nworkers;
+
+   return tsdec_run(&job, stats);
 }
 
 int tsdec_default_workers (void)
@@ -1120,6 +1310,13 @@ int analyze_file (const char *ifile, int verbose, const int *pid_filter,
 
    while ((n = reader_fill(&r)) > 0)
    {
+      if (tsdec_cancel_requested())
+      {
+         stats->canceled = 1;
+         ret = RET_CANCELED;
+         goto analyze_done;
+      }
+
       for (i = 0; i < n; i++)
       {
          unsigned char *p = r.buf + i * PCKTSIZE;
@@ -1164,6 +1361,7 @@ int analyze_file (const char *ifile, int verbose, const int *pid_filter,
       }
    }
 
+analyze_done:
    tsdec_log(1, "pid survey for %s", ifile);
    tsdec_log(1, "%-7s %12s %12s %7s %9s", "pid", "packets", "scrambled", "share", "cc errors");
    for (k = 0; k < npid; k++)
@@ -1181,7 +1379,7 @@ int analyze_file (const char *ifile, int verbose, const int *pid_filter,
    free(pid);
    reader_close(&r);
    (void) verbose;
-   return RET_OK;
+   return ret;
 }
 
 /* ------------------------------------------------------------------ *

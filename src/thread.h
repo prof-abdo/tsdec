@@ -66,6 +66,12 @@ static int tsdec_thread_join (tsdec_thread_t t)
    return 0;
 }
 
+/* sleep for the given number of milliseconds */
+static void sleep_ms (unsigned long ms)
+{
+   Sleep((DWORD) ms);
+}
+
 static int tsdec_cpu_count (void)
 {
    SYSTEM_INFO si;
@@ -76,6 +82,7 @@ static int tsdec_cpu_count (void)
 #else
 # include <pthread.h>
 # include <unistd.h>
+# include <time.h>
 
 typedef pthread_t tsdec_thread_t;
 typedef pthread_mutex_t tsdec_mutex_t;
@@ -99,6 +106,15 @@ static int tsdec_thread_start (tsdec_thread_t *t, void *(*fn)(void *), void *arg
 static int tsdec_thread_join (tsdec_thread_t t)
 {
    return pthread_join(t, NULL);
+}
+
+/* sleep for the given number of milliseconds */
+static void sleep_ms (unsigned long ms)
+{
+   struct timespec ts;
+   ts.tv_sec = (time_t) (ms / 1000);
+   ts.tv_nsec = (long) ((ms % 1000) * 1000000L);
+   nanosleep(&ts, NULL);
 }
 
 static int tsdec_cpu_count (void)

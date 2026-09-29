@@ -83,6 +83,10 @@ all: tsdec
 tsdec: $(OBJS)
 	$(TSDEC_LINK) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
+# everything but the command line front end, for tools that supply their own
+# main() and link against the core
+LIB_SRC = $(filter-out src/tsdec_main.c,$(CORE_SRC))
+
 # self test: the bitsliced engine must agree bit for bit with the scalar one
 csa_selftest: tools/csa_selftest.c $(CSA_SRC)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
@@ -91,7 +95,11 @@ csa_selftest: tools/csa_selftest.c $(CSA_SRC)
 bench_csa: tools/bench_csa.c $(CSA_SRC)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-test: csa_selftest tsdec
+# drives the stop path the same way a front end would
+cancel_test: tools/cancel_test.c $(LIB_SRC)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+test: csa_selftest cancel_test tsdec
 	./csa_selftest
 
 bench: bench_csa
@@ -99,4 +107,5 @@ bench: bench_csa
 
 clean:
 	rm -f tsdec tsdec.exe csa_selftest csa_selftest.exe bench_csa bench_csa.exe
+	rm -f cancel_test cancel_test.exe
 	rm -rf obj

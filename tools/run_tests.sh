@@ -195,6 +195,87 @@ tsn -f "$(n "$work/does-not-exist.cwl")" -i "$(n "$work/plain.plain.ts")" \
 tsn -f "$(n "$work/plain.cwl")" -i "$(n "$work/plain.plain.ts")" >/dev/null 2>&1
 [ $? -ne 0 ] && ok "missing -o is a usage error" || no "missing -o is a usage error"
 
+# --- cancellation ------------------------------------------------------------
+# The stop path is what the GUI's stop button is built on, so it gets the same
+# treatment as everything else. It needs a recording big enough that a single
+# thread is still working when the stop arrives; this builds one only as large
+# as it needs to be.
+echo
+echo "== cancellation =="
+canceller=""
+for cand in "$here/cancel_test" "$here/cancel_test.exe"; do
+   [ -x "$cand" ] && canceller="$cand" && break
+done
+
+if [ -z "$canceller" ]; then
+   echo "  (cancel_test not built, run: make test)"
+else
+   # A recording big enough that a single thread is still working when the
+   # stop arrives. About 215 MiB, which is roughly a second on one thread:
+   # fast enough to build, slow enough to interrupt.
+   if py "$here/tools/mk_ts.py" -o "$(p "$work/cancel.plain.ts")" -n 20000 >/dev/null 2>&1; then
+      # replicate it to size, renumbering the continuity counter so the
+      # duplicate control counters do not trip the decoder
+      py - "$(p "$work/cancel.plain.ts")" "$(p "$work/cancel.big.ts")" <<'PYEOF'
+import sys
+src = open(sys.argv[1], 'rb').read()
+out = bytearray()
+for r in range(60):
+    for i in range(0, len(src), 188):
+        p = bytearray(src[i:i + 188])
+        p[3] = (p[3] & 0xf0) | ((p[3] + r) & 0x0f)
+        out += p
+open(sys.argv[2], 'wb').write(out)
+PYEOF
+      py "$here/tools/mk_test_pair.py" -i "$(p "$work/cancel.big.ts")" \
+         -o "$(p "$work/cancel.enc.ts")" -c "$(p "$work/cancel.cwl")" \
+         -t "$(n "$tsdec")" -w 20000 --quiet >/dev/null 2>&1
+
+      if [ -s "$work/cancel.enc.ts" ]; then
+         # one thread gives about a second of work, so the stop at 300ms
+         # reliably lands in the middle. More threads finish sooner, which is
+         # fine but no longer proves anything about the stop, so only the
+         # single threaded run is asserted here.
+         "$canceller" "$(n "$work/cancel.enc.ts")" "$(n "$work/cancel.cwl")" \
+            "$(n "$work/cancel.out.1.ts")" 1 300 >/dev/null 2>&1
+         if [ $? -eq 0 ]; then
+            ok "stop takes effect, output stays packet aligned"
+         else
+            no "stop takes effect"
+         fi
+
+         # and the same through the threaded path, where the ring has to drain
+         "$canceller" "$(n "$work/cancel.enc.ts")" "$(n "$work/cancel.cwl")" \
+            "$(n "$work/cancel.out.8.ts")" 8 60 >/dev/null 2>&1
+         if [ $? -eq 0 ]; then
+            ok "stop works through the threaded path"
+         else
+            no "stop works through the threaded path"
+         fi
+
+         # what was written before the stop must still be correct
+         if py - "$(p "$work/cancel.big.ts")" "$(p "$work/cancel.out.1.ts")" \
+                <<'PYEOF'
+import sys
+plain = open(sys.argv[1], 'rb').read()
+part = open(sys.argv[2], 'rb').read()
+n = len(part) // 188
+if n == 0 or len(part) % 188 != 0:
+    sys.exit(1)
+sys.exit(0 if all(part[i*188+4:i*188+188] == plain[i*188+4:i*188+188]
+                  for i in range(0, n, 401)) else 1)
+PYEOF
+         then
+            ok "the part written before the stop is correct"
+         else
+            no "the part written before the stop is correct"
+         fi
+      else
+         echo "  (could not build the cancellation sample)"
+      fi
+   fi
+fi
+
 echo
 echo "== summary: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

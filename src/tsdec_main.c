@@ -270,6 +270,13 @@ int main (int argc, char **argv)
       }
    }
 
+   /* Ctrl+C should ask the job to stop rather than kill it mid write, so the
+    * output stays a whole number of packets and stays playable up to that
+    * point. Install it before the self test so even that path can be
+    * interrupted on a machine where it somehow hangs. */
+   tsdec_install_sigint_handler();
+   tsdec_clear_cancel();
+
    /* the CSA engine can silently produce garbage if it miscompiles, so prove
     * it against the published test vectors before touching any data */
    if ((ret = csa_selftest()) != RET_OK)
