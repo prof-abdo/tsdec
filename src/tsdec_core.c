@@ -100,14 +100,24 @@ const char *tsdec_status_text (int ret)
          return "done";
       case RET_INFILE_NOTOPEN:
          return "the recording could not be opened";
+      case RET_INFILE_MODERR:
+         return "the recording changed while it was being read";
       case RET_CWLOPEN:
          return "the control word log could not be read";
+      case RET_CWLFILEOPEN:
+         return "the control word log file could not be opened";
+      case RET_TOOLESSCWS:
+         return "the control word log has no usable control words";
+      case RET_OUTOFMEMORY:
+         return "out of memory";
       case RET_OUTFILEOPEN:
          return "the output file could not be written";
       case RET_NOSYNC:
          return "could not sync the control word log to this recording";
+      case RET_OUTOFCWS:
+         return "the control word log ran out before the recording";
       case RET_TSCORRUPT:
-         return "the recording is too damaged to read";
+         return "the transport stream is too damaged to read";
       case RET_NOTCRYPTED:
          return "the recording holds no encrypted packets";
       case RET_EOF:
@@ -118,6 +128,8 @@ const char *tsdec_status_text (int ret)
          return "the cipher self test failed";
       case RET_USAGE:
          return "bad command line";
+      case RET_BATCH:
+         return "batched runs are not supported";
       default:
          return "failed";
    }
