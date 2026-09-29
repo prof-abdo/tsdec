@@ -8,9 +8,16 @@
 # The bitsliced CSA engine needs SSE2 on x86. On other targets set
 # DVBCSA_WORD to uint32 (see src/dvbcsa/config.h).
 
-CC          ?= gcc
+# make ships a built-in default CC = "cc", so "?=" would never take effect and
+# "cc" is not a program on MSYS2. Only override it when the value really came
+# from make itself, and never when the caller passed CC on the command line or
+# in the environment.
+ifeq ($(origin CC),default)
+  CC := gcc
+endif
+
 # NB: do not call this LD, make already defines LD as "ld".
-TSDEC_LINK  ?= $(CC)
+TSDEC_LINK ?= $(CC)
 
 CFLAGS      ?= -O3
 CFLAGS      += -Wall -W -Isrc
