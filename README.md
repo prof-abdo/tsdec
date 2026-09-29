@@ -7,6 +7,9 @@ Version 2.0. Based on TSDEC V0.4.1 by ganymede, which in turn grew out of
 cwldec. The CSA engine and the FFdecsa bitslice implementation come from
 libdvbcsa (Alexandre Becoulet), bundled under `src/dvbcsa`.
 
+Releases: [CHANGELOG.md](CHANGELOG.md) ·
+[latest release](https://github.com/prof-abdo/tsdec/releases/latest)
+
 ---
 
 ## What it does
