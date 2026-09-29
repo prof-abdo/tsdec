@@ -78,15 +78,25 @@ jobs:
 
       - name: Package
         shell: bash
+        env:
+          BINARY: ${{ matrix.binary }}
+          ARTIFACT: ${{ matrix.artifact }}
+          IS_WINDOWS: ${{ matrix.os == 'windows-latest' }}
         run: |
           set -eu
+
+          staged="$ARTIFACT"
+          if [ "$IS_WINDOWS" = "true" ]; then
+            staged="$ARTIFACT.exe"
+          fi
+
           mkdir -p dist
-          cp README.md LICENSE dist/ 2>/dev/null || cp README.md dist/
-          cp "${{ matrix.binary }}" "dist/${{ matrix.artifact }}$( [ "${{ matrix.os }}" = "windows-latest" ] && echo '.exe' )"
-          cd dist
-          tar czf "${{ matrix.artifact }}.tar.gz" "${{ matrix.artifact }}"* README.md
-          # a bare binary next to the archive, for anyone who just wants the file
-          cp "${{ matrix.artifact }}"* ./
+          cp "$BINARY" "dist/$staged"
+          cp README.md LICENSE dist/
+
+          # a tarball for convenience; the bare binary is also uploaded on its own
+          tar czf "dist/$ARTIFACT.tar.gz" -C dist "$staged" README.md LICENSE
+          ls -l dist
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
