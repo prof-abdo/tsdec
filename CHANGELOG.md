@@ -34,6 +34,10 @@ All notable changes to TSDEC are recorded here. The format follows
   choose what to work on, so using both is refused rather than one quietly
   winning.
 
+  `--json -a` emits the tables as a `programs` event, with the pids and names as
+  fields. A front end cannot pick a service out of a formatted log line, so the
+  data it needs has to be data.
+
 ### Fixed
 
 - **The test generator was building recordings nobody could read.** It wrote

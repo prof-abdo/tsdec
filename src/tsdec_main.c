@@ -212,6 +212,52 @@ static void json_progress (void *user, unsigned long done,
    fflush(stdout);
 }
 
+/* Emits the program tables as one json object per program, then a summary.
+ * A front end needs this to offer a service to pick rather than a list of
+ * pids to read off a hex dump, and it is the same data the human log shows,
+ * just as fields instead of as columns. */
+static void json_programs (const char *ifile)
+{
+   programs_t progs;
+   int n, i, j;
+
+   n = programs_read(ifile, &progs, 1);
+   if (n <= 0)
+   {
+      printf("{\"event\":\"programs\",\"count\":0,\"programs\":[]}\n");
+      fflush(stdout);
+      return;
+   }
+
+   printf("{\"event\":\"programs\",\"count\":%d,\"programs\":[", n);
+   for (i = 0; i < n; i++)
+   {
+      program_t *p = &progs.programs[i];
+
+      if (i)
+         printf(",");
+      printf("{\"program\":%d,\"pmt\":%d,\"pcr\":%d,\"encrypted\":%s,"
+             "\"name\":\"", p->program, p->pmt_pid, p->pcr_pid,
+             p->encrypted ? "true" : "false");
+      json_escape(p->name);
+      printf("\",\"streams\":[");
+      for (j = 0; j < p->nstreams; j++)
+      {
+         if (j)
+            printf(",");
+         printf("{\"type\":%d,\"pid\":%d,\"name\":\"",
+                p->streams[j].type, p->streams[j].pid);
+         json_escape(p->streams[j].name);
+         printf("\"}");
+      }
+      printf("]}");
+   }
+   printf("]}\n");
+   fflush(stdout);
+
+   programs_free(&progs);
+}
+
 static void json_result (json_ctx_t *ctx, int ret)
 {
    double secs = now_seconds_public() - ctx->started;
@@ -432,6 +478,13 @@ int main (int argc, char **argv)
    if (analyze)
    {
       ret = analyze_file(ifile, verbose, pid_filter, npid_filter, &stats);
+
+      /* In json mode the program tables go out as data rather than as log
+       * text, because a front end cannot pick a service out of a formatted
+       * line: it needs the pids and the names as fields. */
+      if (json_mode)
+         json_programs(ifile);
+
       return ret;
    }
 
