@@ -3,7 +3,7 @@
 Decrypts recorded DVB transport stream files (`*.ts`) using control words
 logged elsewhere, with the common scrambling algorithm.
 
-Version 2.4. Based on TSDEC V0.4.1 by ganymede, which in turn grew out of
+Version 2.5. Based on TSDEC V0.4.1 by ganymede, which in turn grew out of
 cwldec. The CSA engine and the FFdecsa bitslice implementation come from
 libdvbcsa (Alexandre Becoulet), bundled under `src/dvbcsa`.
 
@@ -79,16 +79,50 @@ and a mismatch is reported, since that usually means a typo in the log.
 
 ### Selection
 
-| option | meaning |
-|---|---|
-| `-p <pid>[,…]` | only act on these PIDs, decimal or `0x` hex |
-
-Useful when a recording holds a whole transponder with several services and you
-only have control words for one of them.
+A recording of a transponder usually holds several services, each with its own
+elementary streams and its own control words. tsdec reads the program tables to
+find out what is there:
 
 ```sh
-tsdec -p 0x100,0x101 -f log.cwl -i rec.ts -o clear.ts
+tsdec -a -i rec.ts
 ```
+
+```
+pid          packets    scrambled   share cc errors
+0x0000          402            0    1.0%         0
+0x0050          402            0    1.0%         0
+0x0100        18452        18452   46.0%         0
+0x0101         9207         9207   23.0%         0
+0x0200         4800         4800   12.0%         0
+60000 packets total, 32459 scrambled, 0 without a sync byte
+
+programs found: 2
+  #1     (no name in the sdt)      pmt 0x0050  pcr 0x0100  uses a control word
+        0x0100  mpeg-2          type 0x02  18452 of 18452 packets scrambled
+        0x0101  mpeg-1 audio    type 0x03  9207 of 9207 packets scrambled
+  #2     (no name in the sdt)      pmt 0x0060  pcr 0x0200  uses a control word
+        0x0200  H.264           type 0x1b  4800 of 4800 packets scrambled
+
+  use -n <number> to decrypt one of these, or -p for individual pids
+```
+
+| option | meaning |
+|---|---|
+| `-n <program>` | only act on this program, looked up in the pat and pmt |
+| `-p <pid>[,…]` | only act on these PIDs, decimal or `0x` hex |
+
+```sh
+tsdec -n 1 -f log.cwl -i rec.ts -o channel1.ts
+```
+
+`-n` is the one to reach for: it names the service rather than its pids, and
+the pids of a service are the thing you would otherwise have to read off a
+hex dump. `-p` is still there for when the tables are missing, which happens
+with a capture of a single elementary stream.
+
+The tables are control information and are not scrambled even when the
+elementary streams beside them are, so both work on a recording that has not
+been decrypted.
 
 ### Tuning
 
@@ -354,15 +388,14 @@ arguments are rejected.
 
 ## Known limitations
 
-- One service per recording. Without reading the PAT and PMT, tsdec does not
-  know which PIDs belong to which program, so a recording of several services
-  interleaves control words and fails. `-p` sidesteps this by restricting the
-  work to the PIDs you care about.
+- Packets whose sync byte is missing are counted and copied through unchanged.
+  They are never a reason to stop, with or without `-r`.
 - A control word log that stops before the stream ends leaves the remainder
   scrambled; there is nothing to decrypt it with. `-r` cannot help with that,
   only with a log that has drifted out of step with the recording.
-- Packets whose sync byte is missing are counted and copied through unchanged.
-  They are never a reason to stop, with or without `-r`.
+- Service names are only shown when the recording carries an sdt, which a
+  stripped capture often does not. The pids and stream types are read from the
+  pat and the pmt either way.
 - No GUI ships here. The command line tool is the supported interface of this
   repository. A replacement for the 0.4.1 Win32 front end lives in
   [tsdec-gui](https://github.com/prof-abdo/tsdec-gui), which drives this binary

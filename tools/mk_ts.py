@@ -20,7 +20,9 @@ import struct
 
 PCKTSIZE = 188
 PAT_PID = 0x0000
-PMT_PID = 0x1000
+# The pat has to point at the pid the pmt is actually sent on, or a reader
+# that trusts it will listen to a pid nobody is using.
+PMT_PID = 0x0050
 VIDEO_PID = 0x0100
 AUDIO_PID = 0x0101
 
@@ -60,17 +62,40 @@ def ts_packet(pid, pusi, payload, cc):
     return bytes(pkt)
 
 
+def psi_packet(pid, cc, section):
+    """A pusi packet carrying one whole section.
+
+    A pusi packet starts its payload with a pointer field saying how far in the
+    new section begins. Here it is zero, because the section does start
+    immediately, but the byte is still there, and a reader that skips it lands
+    one byte into the section and then rejects it on the checksum.
+    """
+    return ts_packet(pid, 1, b"\x00" + section, cc)
+
+
 def make_pat():
-    body = bytes([0x00, 0x00, 0xB0, 0x0D, 0x00, 0x01, 0xC1, 0x00, 0x00,
+    # table_id 0x00, section_syntax_indicator 1 with the top of the length,
+    # section_length 13, transport_stream_id, version/current_next and the
+    # section numbers, then one program mapping 1 onto pmt pid 0x50, then the
+    # crc over all of it
+    body = bytes([0x00, 0xB0, 0x0D, 0x00, 0x01, 0xC1, 0x00, 0x00,
                   0x00, 0x01, 0xE0, 0x50])
     return body + struct.pack(">I", mpeg_crc(body))
 
 
 def make_pmt():
-    body = bytes([0x00, 0x02, 0xB0, 0x17, 0x00, 0x01, 0xC1, 0x00, 0x00,
+    # program 1, version/current_next, section 0, pcr pid 0x50, program info
+    # length 0, no scrambling flag, then two elementary streams: mpeg-2 video on
+    # 0x100 and mpeg audio on 0x101
+    # table_id 0x02 for a pmt, section_syntax_indicator 1 with the top of the
+    # length, section_length 23, program_number 1, version/current_next and
+    # the section numbers, pcr pid 0x50, program_info_length 0 and no
+    # scrambling flag, then two elementary streams: mpeg-2 video on 0x100 and
+    # mpeg audio on 0x101, then the crc over all of it
+    body = bytes([0x02, 0xB0, 0x17, 0x00, 0x01, 0xC1, 0x00, 0x00,
                   0xE0, 0x50, 0xF0, 0x00,
-                  0x02, 0xE0, 0x00, 0xF0, 0x00,
-                  0x03, 0xE0, 0x01, 0xF0, 0x00])
+                  0x02, 0xE1, 0x00, 0xF0, 0x00,
+                  0x03, 0xE1, 0x01, 0xF0, 0x00])
     return body + struct.pack(">I", mpeg_crc(body))
 
 
@@ -91,11 +116,11 @@ def build(rng, total_packets, with_audio, psi_every):
 
         # unencrypted PSI, exactly like a real recording
         if psi_every and index % psi_every == 0:
-            packets.append(ts_packet(PAT_PID, 1, make_pat(), cc[PAT_PID]))
+            packets.append(psi_packet(PAT_PID, cc[PAT_PID], make_pat()))
             cc[PAT_PID] = (cc[PAT_PID] + 1) & 0xF
             continue
         if psi_every and index % psi_every == psi_every // 2:
-            packets.append(ts_packet(PMT_PID, 1, make_pmt(), cc[PMT_PID]))
+            packets.append(psi_packet(PMT_PID, cc[PMT_PID], make_pmt()))
             cc[PMT_PID] = (cc[PMT_PID] + 1) & 0xF
             continue
 

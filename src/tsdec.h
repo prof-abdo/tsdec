@@ -3,7 +3,7 @@
 #ifndef TSDEC_H
 #define TSDEC_H
 
-#define TSDEC_VERSION "2.4"
+#define TSDEC_VERSION "2.5"
 
 #define PCKTSIZE 188
 
@@ -137,6 +137,62 @@ int tsdec_default_workers (void);
 
 int analyze_file (const char *ifile, int verbose, const int *pid_filter,
                   int npid_filter, stats_t *stats);
+
+/* ------------------------------------------------------------------ *
+ * program specific information
+ * ------------------------------------------------------------------ *
+ *
+ * What is in a recording, as opposed to which pids are in it. A transport
+ * stream carries a PAT that maps program numbers to pids holding a PMT, and a
+ * PMT that lists the pids making up one program. Without reading them a
+ * recording of several services is just a pile of interleaved control words,
+ * which is why a single service was assumed until now.
+ *
+ * Nothing here depends on the payload being decrypted: the tables are
+ * program specific information, which is a control structure and is not
+ * scrambled even when the elementary streams beside it are. */
+
+#define TSDEC_MAX_PROGRAMS 32
+#define TSDEC_MAX_STREAMS   16
+
+typedef struct
+{
+   int           type;        /* stream_type from the PMT */
+   int           pid;
+   char          name[24];    /* service name from the SDT, or a description */
+} stream_t;
+
+typedef struct
+{
+   int           program;     /* program_number from the PAT */
+   int           pmt_pid;
+   int           pcr_pid;
+   int           nstreams;
+   int           encrypted;   /* 1 when the PMT says a control word is used */
+   char          name[32];
+   stream_t      streams[TSDEC_MAX_STREAMS];
+} program_t;
+
+typedef struct
+{
+   int           nprograms;
+   program_t     programs[TSDEC_MAX_PROGRAMS];
+} programs_t;
+
+/* Read the tables from a recording. Returns the number of programs found, 0 if
+ * there is no PAT, or a negative tenReturnValue. quiet stops it complaining
+ * about a recording that simply has no tables in it, which is a capture of one
+ * elementary stream rather than a program. */
+int programs_read (const char *ifile, programs_t *out, int quiet);
+
+void programs_free (programs_t *p);
+
+/* The pids belonging to one program, for handing to the pid filter. Returns
+ * how many were written, which is capped at max. */
+int programs_pids (const programs_t *p, int program, int *out, int max);
+
+/* "video", "audio", "h.264" and so on, for a stream_type. */
+const char *stream_type_name (int type);
 
 int ccw_file (const char *ifile, const char *ofile, const unsigned char *ccw,
               int encrypt, int verbose, stats_t *stats);

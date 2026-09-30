@@ -105,6 +105,11 @@ cancel_test: tools/cancel_test.c $(LIB_SRC)
 residue_test: tools/residue_test.c $(LIB_SRC)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
+# checks the program tables, which are what turn a capture of a whole
+# transponder into something a service can be picked out of
+psi_test: tools/psi_test.c $(LIB_SRC)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
 PYTHON ?= python
 
 # the cancellation test needs a recording big enough that one worker cannot
@@ -115,10 +120,22 @@ test/cancel.enc.ts: tools/mk_ts.py tools/mk_test_pair.py tsdec
 	$(PYTHON) tools/mk_test_pair.py -i test/cancel.plain.ts \
 		-o test/cancel.enc.ts -c test/cancel.cwl -t ./tsdec -w 20000 --quiet
 
-test: csa_selftest cancel_test residue_test tsdec test/cancel.enc.ts
+# two services interleaved, which is what a transponder normally carries and
+# what the program tables exist to make sense of
+test/multi.ts: tools/mk_multi_ts.py tools/mk_test_pair.py tsdec
+	mkdir -p test
+	$(PYTHON) tools/mk_multi_ts.py -o test/multi.plain.ts \
+		-c test/multi.cwl -n 20000 -s 5
+	$(PYTHON) tools/mk_test_pair.py -i test/multi.plain.ts \
+		-o test/multi.ts -c test/multi.enc.cwl -t ./tsdec -w 4000 --quiet
+	rm -f test/multi.plain.ts
+
+test: csa_selftest cancel_test residue_test psi_test tsdec \
+	test/cancel.enc.ts test/multi.ts
 	./csa_selftest
 	./cancel_test
 	./residue_test
+	./psi_test
 
 bench: bench_csa
 	./bench_csa
@@ -126,5 +143,6 @@ bench: bench_csa
 clean:
 	rm -f tsdec tsdec.exe csa_selftest csa_selftest.exe bench_csa bench_csa.exe
 	rm -f residue_test residue_test.exe
+	rm -f psi_test psi_test.exe
 	rm -f cancel_test cancel_test.exe
 	rm -rf obj

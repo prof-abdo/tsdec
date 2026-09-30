@@ -1648,10 +1648,493 @@ analyze_done:
    tsdec_log(1, "%lu packets total, %lu scrambled, %lu without a sync byte",
              stats->total_packets, stats->encrypted_packets, stats->corrupt_packets);
 
+   /* The program tables are what turn a pile of pids into something a person
+    * can act on. A transponder normally carries several services, each with
+    * its own control words, and a recording of one is the normal case rather
+    * than the special one. */
+   {
+      programs_t progs;
+
+      if (programs_read(ifile, &progs, 1) > 0)
+      {
+         int i;
+
+         tsdec_log(1, "");
+         tsdec_log(1, "programs found: %d", progs.nprograms);
+
+         for (i = 0; i < progs.nprograms; i++)
+         {
+            program_t *pr = &progs.programs[i];
+            int j, any = 0;
+
+            /* whether a service is encrypted is a property of the packets on
+             * its pids, not something the tables say, and the survey has
+             * already counted them. One scrambled stream is enough: a
+             * programme is only watchable if all of it is. */
+            for (j = 0; j < pr->nstreams; j++)
+            {
+               int k;
+               for (k = 0; k < npid; k++)
+                  if (pid[k].pid == pr->streams[j].pid && pid[k].scrambled)
+                     any = 1;
+            }
+            pr->encrypted = any;
+
+            tsdec_log(1, "  #%-5d %-24s  pmt 0x%04x  pcr 0x%04x  %s",
+                      pr->program,
+                      pr->name[0] ? pr->name : "(no name in the sdt)",
+                      pr->pmt_pid, pr->pcr_pid,
+                      pr->encrypted ? "uses a control word" : "in the clear");
+
+            for (j = 0; j < pr->nstreams; j++)
+            {
+               unsigned long total = 0, scr = 0;
+               int k;
+
+               for (k = 0; k < npid; k++)
+                  if (pid[k].pid == pr->streams[j].pid)
+                  {
+                     total = pid[k].count;
+                     scr = pid[k].scrambled;
+                  }
+
+               tsdec_log(1, "        0x%04x  %-14s  type 0x%02x  %lu of %lu packets scrambled",
+                         pr->streams[j].pid, pr->streams[j].name,
+                         pr->streams[j].type, scr, total);
+            }
+         }
+
+         if (progs.nprograms > 1)
+         {
+            tsdec_log(1, "");
+            tsdec_log(1, "  use -n <number> to decrypt one of these, or -p for "
+                      "individual pids");
+         }
+      }
+      programs_free(&progs);
+   }
+
    free(pid);
    reader_close(&r);
    (void) verbose;
    return ret;
+}
+
+/* ------------------------------------------------------------------ *
+ * program specific information
+ * ------------------------------------------------------------------ *
+ *
+ * The tables are carried in a single packet more often than not, but a section
+ * is allowed to run to three packets with a pointer field saying where it
+ * starts, so both shapes have to be handled. Doing that properly means holding
+ * a section across packets, which is why there is a small assembler here
+ * rather than a parse straight out of the packet.
+ *
+ * The crc is checked. A control structure is the one place in a transport
+ * stream where a corrupt byte changes the meaning of everything after it, and
+ * acting on a bad PAT means picking the wrong pids and decrypting the wrong
+ * thing, silently. */
+
+#define PSI_TABLE_PAT   0x00
+#define PSI_TABLE_PMT   0x02
+#define PSI_TABLE_SDT   0x42
+#define PSI_MAX_SECTION 4096
+
+/* MPEG-2 systems crc, the one with the 0x04C11DB7 polynomial and no inversion
+ * and no final xor, which is not the crc32 that most libraries hand out. */
+static unsigned int mpeg_crc32 (const unsigned char *p, size_t n)
+{
+   static unsigned int table[256];
+   static int built = 0;
+   unsigned int crc = 0xFFFFFFFFu;
+   size_t i;
+
+   if (!built)
+   {
+      int n2, k;
+      for (n2 = 0; n2 < 256; n2++)
+      {
+         unsigned int c = (unsigned int) n2 << 24;
+         for (k = 0; k < 8; k++)
+            c = (c & 0x80000000u) ? (c << 1) ^ 0x04C11DB7u : c << 1;
+         table[n2] = c;
+      }
+      built = 1;
+   }
+
+   for (i = 0; i < n; i++)
+      crc = (crc << 8) ^ table[((crc >> 24) ^ p[i]) & 0xFF];
+
+   return crc;
+}
+
+/* Copies one section out of a packet into buf, dealing with the pointer field
+ * that a pusi packet carries. Returns the section length, 0 for a packet with
+ * no section in it, and -1 when the section does not fit. */
+static int psi_section_from_packet (const unsigned char *p, unsigned char *buf,
+                                    int cap)
+{
+   unsigned int off = 4;
+   int afc = (p[3] >> 4) & 3;
+   int pointer, len;
+
+   /* A program table is control information and is not scrambled even when
+    * the elementary streams around it are, so the header should show no
+    * scrambling. Anything else is either encrypted, which we cannot read, or
+    * not a section. */
+   if ((p[3] & 0xC0) != 0)
+      return 0;
+   if (afc == 3)
+   {
+      if (p[4] > PCKTSIZE - off - 4)
+         return 0;
+      off += p[4] + 1;
+   }
+   else if (afc != 1)
+      return 0;
+
+   if (off >= PCKTSIZE)
+      return 0;
+
+   if (IsPUSIPacket(p))
+   {
+      /* the first byte says how far into the payload the section starts: the
+       * bytes before it are the tail of whatever the previous packet was
+       * carrying */
+      pointer = p[off];
+      if (off + 1 + pointer + 3 > PCKTSIZE)
+         return 0;
+      off += 1 + pointer;
+   }
+
+   if (off + 3 > PCKTSIZE)
+      return 0;
+
+   /* section_length covers everything after itself, crc included */
+   len = 3 + (((unsigned int) p[off + 1] & 0x0F) << 8 | p[off + 2]);
+   if (len < 4 || len > cap)
+      return -1;
+   if (off + len > PCKTSIZE)
+      return -1;                     /* continues in the next packet */
+
+   memcpy(buf, p + off, (size_t) len);
+
+   /* a section that arrived whole must also be the length it says it is and
+    * carry a crc that agrees */
+   if (mpeg_crc32(buf, (size_t) len) != 0)
+      return -1;
+
+   return len;
+}
+
+const char *stream_type_name (int type)
+{
+   switch (type)
+   {
+      case 0x01: return "mpeg-1";
+      case 0x02: return "mpeg-2";
+      case 0x03: return "mpeg-1 audio";
+      case 0x04: return "mpeg-2 audio";
+      case 0x0F: return "AAC audio";
+      case 0x10: return "mpeg-4";
+      case 0x11: return "AAC-LATM";
+      case 0x1B: return "H.264";
+      case 0x24: return "HEVC";
+      case 0x25: return "HEVC";
+      case 0x81: return "AC-3";
+      case 0x82: return "DTS";
+      case 0x87: return "DOLBY digital plus";
+      case 0xEA: return "DVB subtitles";
+      case 0x06: return "private data";
+      default:   return "unknown";
+   }
+}
+
+static void parse_pat (const unsigned char *s, int len, programs_t *out)
+{
+   int i, end;
+
+   /* skip table_id, section_syntax_indicator, section_length, transport_stream
+    * id, version and section numbers, and stop before the crc */
+   if (len < 12)
+      return;
+   end = len - 4;
+
+   for (i = 8; i + 4 <= end; i += 4)
+   {
+      int program = (int) (((unsigned int) s[i] << 8) | s[i + 1]);
+      int pid = (int) (((unsigned int) (s[i + 2] & 0x1F) << 8) | s[i + 3]);
+      int k, seen = -1;
+
+      if (program == 0)
+         continue;                   /* network pid, not a program */
+
+      /* A pat repeats every few hundred packets, so the same program arrives
+       * over and over. Add it once, and fill in a name a later sdt may have
+       * brought, rather than listing one service per repetition. */
+      for (k = 0; k < out->nprograms; k++)
+         if (out->programs[k].program == program)
+            seen = k;
+
+      if (seen >= 0)
+      {
+         if (out->programs[seen].pmt_pid != pid)
+            out->programs[seen].pmt_pid = pid;
+         continue;
+      }
+
+      if (out->nprograms >= TSDEC_MAX_PROGRAMS)
+      {
+         if (!out->nprograms)
+            tsdec_log(2, "the program table lists more than %d programs, "
+                      "reading the first %d", TSDEC_MAX_PROGRAMS,
+                      TSDEC_MAX_PROGRAMS);
+         return;
+      }
+
+      out->programs[out->nprograms].program = program;
+      out->programs[out->nprograms].pmt_pid = pid;
+      out->programs[out->nprograms].pcr_pid = -1;
+      out->nprograms++;
+   }
+}
+
+static void parse_pmt (const unsigned char *s, int len, programs_t *out)
+{
+   int program_number, pcr, info_len, es_base, i, end;
+   program_t *p = NULL;
+
+   if (len < 16)
+      return;
+
+   /* table_id, the two length bytes, program_number, version, the two section
+    * numbers, pcr_pid, the program info flags and length, then the streams.
+    * A pmt carries no "this program is scrambled" bit: whether it uses a
+    * control word is worked out from the pids, not from here. */
+   program_number = (int) (((unsigned int) s[3] << 8) | s[4]);
+
+   for (i = 0; i < out->nprograms; i++)
+      if (out->programs[i].program == program_number)
+         p = &out->programs[i];
+   if (!p)
+   {
+      /* a pmt for a program the pat did not list: take it anyway rather than
+       * dropping a service we can otherwise use */
+      if (out->nprograms >= TSDEC_MAX_PROGRAMS)
+         return;
+      p = &out->programs[out->nprograms++];
+      p->program = program_number;
+   }
+
+   pcr = (int) (((unsigned int) (s[8] & 0x1F) << 8) | s[9]);
+   p->pcr_pid = pcr;
+
+   info_len = (int) (((unsigned int) (s[10] & 0x0F) << 8) | s[11]);
+   p->nstreams = 0;
+   es_base = 12 + info_len;
+   end = len - 4;
+
+   for (i = es_base; i + 5 <= end;)
+   {
+      int type = s[i];
+      int pid = (int) (((unsigned int) (s[i + 1] & 0x1F) << 8) | s[i + 2]);
+      int es_info = (int) (((unsigned int) (s[i + 3] & 0x0F) << 8) | s[i + 4]);
+
+      if (i + 5 + es_info > end)
+         break;                       /* malformed, stop rather than walk off */
+
+      if (p->nstreams < TSDEC_MAX_STREAMS)
+      {
+         stream_t *st = &p->streams[p->nstreams++];
+         st->type = type;
+         st->pid = pid;
+         st->name[0] = 0;
+         strncpy(st->name, stream_type_name(type), sizeof(st->name) - 1);
+      }
+      else
+      {
+         tsdec_log(2, "program %d lists more than %d streams, reading the "
+                   "first %d", program_number, TSDEC_MAX_STREAMS,
+                   TSDEC_MAX_STREAMS);
+         break;
+      }
+
+      i += 5 + es_info;
+   }
+}
+
+static void parse_sdt (const unsigned char *s, int len, programs_t *out)
+{
+   int end, i;
+
+   if (len < 15)
+      return;
+   end = len - 4;
+
+   /* the service list sits after the transport stream id, the version byte
+    * and the section numbers, and after the last section offset if present */
+   i = 11;
+   if (i < end && (s[i] & 0x80))
+   {
+      int l = (int) (((unsigned int) (s[i + 1] & 0x0F) << 8) | s[i + 2]);
+      i += 3 + l;
+   }
+
+   while (i + 5 <= end)
+   {
+      int service_id, name_bytes, name_len, j, k, p;
+
+      service_id = (int) (((unsigned int) s[i] << 8) | s[i + 1]);
+
+      /* three bytes of service entry, then the descriptor loop, then two
+       * bytes giving the length of the name */
+      name_bytes = 3 + (int) (s[i + 5] & 0x0F);
+      if (i + name_bytes + 2 > end)
+         break;
+
+      /* walk the descriptors looking for 0x48, the service descriptor, which
+       * is the one that carries a name a viewer would show */
+      j = i + name_bytes;
+      while (j + 2 <= end)
+      {
+         int dlen = s[j + 1];
+         if (j + 2 + dlen > end)
+            break;
+         j += 2 + dlen;
+      }
+
+      if (j + 2 > end)
+         break;
+      name_len = (int) (((unsigned int) (s[j] & 0x0F) << 8) | s[j + 1]);
+      j += 2;
+      if (j + name_len > end)
+         break;
+
+      if (name_len > 0 && name_len < 32)
+      {
+         program_t *prog = NULL;
+         for (k = 0; k < out->nprograms; k++)
+            if (out->programs[k].program == service_id)
+               prog = &out->programs[k];
+
+         if (prog)
+         {
+            /* only plain printable characters are copied: a name in an
+             * encoding we cannot read is better left empty than shown as
+             * mojibake, and an sdt is not a reliable place to guess */
+            for (p = 0; p < name_len; p++)
+            {
+               unsigned char ch = s[j + p];
+               prog->name[p] = (ch >= 0x20 && ch < 0x7F) ? (char) ch : '.';
+            }
+            prog->name[name_len] = 0;
+         }
+      }
+
+      i = j + name_len;
+   }
+}
+
+int programs_read (const char *ifile, programs_t *out, int quiet)
+{
+   reader_t r;
+   unsigned char *sect = NULL;
+   int ret, i;
+   int seen_pat = 0;
+
+   if (!ifile || !out)
+      return -1;
+   memset(out, 0, sizeof(*out));
+
+   sect = (unsigned char *) malloc(PSI_MAX_SECTION);
+   if (!sect)
+      return RET_OUTOFMEMORY;
+
+   ret = reader_open(&r, ifile, 2048);
+   if (ret != RET_OK)
+   {
+      free(sect);
+      return ret;
+   }
+
+   for (;;)
+   {
+      size_t n = reader_fill(&r);
+
+      for (i = 0; i < (int) n; i++)
+      {
+         const unsigned char *p = r.buf + i * PCKTSIZE;
+         int pid = (int) (((unsigned int) (p[1] & 0x1F) << 8) | p[2]);
+         int j, len;
+
+         if (pid != 0x0000 && seen_pat)
+         {
+            /* once the pat is in, only pmt pids are worth a look, plus the
+             * sdt for the service names */
+            int wanted = 0;
+            for (j = 0; j < out->nprograms; j++)
+               if (out->programs[j].pmt_pid == pid)
+                  wanted = 1;
+            if (!wanted && pid != PSI_TABLE_SDT)
+               continue;
+         }
+
+         len = psi_section_from_packet(p, sect, PSI_MAX_SECTION);
+         if (len <= 0)
+            continue;
+
+         if (sect[0] == PSI_TABLE_PAT)
+         {
+            parse_pat(sect, len, out);
+            seen_pat = 1;
+         }
+         else if (sect[0] == PSI_TABLE_PMT)
+         {
+            parse_pmt(sect, len, out);
+         }
+         else if (sect[0] == PSI_TABLE_SDT)
+         {
+            parse_sdt(sect, len, out);
+         }
+      }
+
+      if (n == 0)
+         break;
+      r.have = 0;
+   }
+
+   reader_close(&r);
+   free(sect);
+
+   if (!quiet && out->nprograms == 0)
+      tsdec_log(2, "no program table in this recording, so it holds a bare "
+                "elementary stream rather than a program");
+
+   return out->nprograms;
+}
+
+void programs_free (programs_t *p)
+{
+   if (p)
+      memset(p, 0, sizeof(*p));
+}
+
+int programs_pids (const programs_t *p, int program, int *out, int max)
+{
+   int i, n = 0;
+
+   if (!p || !out)
+      return 0;
+
+   for (i = 0; i < p->nprograms; i++)
+   {
+      int j;
+      if (program >= 0 && p->programs[i].program != program)
+         continue;
+      for (j = 0; j < p->programs[i].nstreams && n < max; j++)
+         out[n++] = p->programs[i].streams[j].pid;
+   }
+   return n;
 }
 
 /* ------------------------------------------------------------------ *

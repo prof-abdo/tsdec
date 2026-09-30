@@ -4,6 +4,50 @@ All notable changes to TSDEC are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project uses
 [semantic versioning](https://semver.org/).
 
+## [2.5.0] - 2026-09-30
+
+### Added
+
+- **The decoder reads the program tables.** `-a` now lists what is in a
+  recording rather than a flat table of pids: every program, its pmt and pcr
+  pid, whether it uses a control word, and each of its streams with a type and
+  a name. `-n <program>` then works on one of them, looking the pids up in the
+  pat and the pmt.
+
+  This is the limitation that has been in the readme since the first release.
+  A transponder normally carries several services with their own elementary
+  streams and their own control words, so a capture of one is the ordinary case
+  and not a special one. Without reading the tables there is no way to know
+  which pids belong to which programme, the control words of the two services
+  are interleaved through the file, and picking the wrong one gives output that
+  decrypts cleanly and is not the programme that was asked for. `-p` sidestepped
+  it by making a person work out the pids by hand.
+
+  The tables are control information and are not scrambled even when the
+  elementary streams beside them are, so this works on a recording that has not
+  been decrypted. Sections are assembled across packets, the pointer field is
+  honoured, and the mpeg crc is checked: a control structure is the one place in
+  a transport stream where a corrupt byte changes the meaning of everything
+  after it, and acting on a bad pat means picking the wrong pids silently.
+
+  Service names are read from the sdt when one is there. `-n` and `-p` both
+  choose what to work on, so using both is refused rather than one quietly
+  winning.
+
+### Fixed
+
+- **The test generator was building recordings nobody could read.** It wrote
+  a pat and a pmt that were malformed in three separate ways: a spurious byte
+  at the front, no pointer field on the pusi packets that carry them, a pmt
+  table_id of 0 where it should have been 2, and a pmt pid that the pat pointed
+  at but that nothing was ever sent on. None of it mattered, because nothing
+  read the tables. It does now, and the tables are the first thing checked.
+
+### Changed
+
+- `-n` used to be accepted and ignored, documented as a count of expected
+  pids. It now selects a program.
+
 ## [2.4.0] - 2026-09-30
 
 ### Fixed
@@ -207,6 +251,7 @@ The first release under this repository. Based on TSDEC V0.4.1 by ganymede.
 - The stale Visual Studio project files, which referenced sources that no
   longer exist, were removed.
 
+[2.5.0]: https://github.com/prof-abdo/tsdec/releases/tag/v2.5.0
 [2.4.0]: https://github.com/prof-abdo/tsdec/releases/tag/v2.4.0
 [2.3.0]: https://github.com/prof-abdo/tsdec/releases/tag/v2.3.0
 [2.2.0]: https://github.com/prof-abdo/tsdec/releases/tag/v2.2.0

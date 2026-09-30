@@ -30,9 +30,10 @@ static void usage (const char *err)
 "                ccw is 16 hex bytes: \"EE EE ... EE OO OO ... OO\"\n"
 "\n"
 "selection:\n"
-"  -p <pid>[,<pid>...]  only act on these PIDs (decimal or 0x hex)\n"
-"                        useful when a transponder carries several services\n"
-"  -n <count>            number of PIDs to expect after -p\n"
+ "  -p <pid>[,<pid>...]  only act on these PIDs (decimal or 0x hex)\n"
+ "                        useful when a transponder carries several services\n"
+ "  -n <program>          only act on this program, looked up in the pat\n"
+ "                        and pmt; run -a to see what a recording holds\n"
 "\n"
 "tuning:\n"
 "  -t <n>       decrypt with n worker threads (1 disables threading)\n"
@@ -246,6 +247,7 @@ int main (int argc, char **argv)
    int fix_checksums = 1;
    int json_mode = 0;
    int nworkers = 0;                 /* 0 = pick from cpu count */
+   int program = -1;                 /* -n, looked up in the program tables */
    int pid_filter[128];
    int npid_filter = 0;
    int i, ret;
@@ -319,7 +321,7 @@ int main (int argc, char **argv)
             if (nworkers < 1) nworkers = 1;
             break;
          case 'v': verbose = atoi(val); break;
-         case 'n': break;               /* accepted for compatibility */
+         case 'n': program = atoi(val); break;
          case 'a': analyze = 1; break;
          case 'r': resync = 1; break;
          case 'k': fix_checksums = 0; break;
@@ -346,6 +348,12 @@ int main (int argc, char **argv)
       return RET_USAGE;
    }
 
+   if (pidarg && program >= 0)
+   {
+      fprintf(stderr, "TSDEC: -n and -p both choose what to work on; use one\n");
+      return RET_USAGE;
+   }
+
    if (pidarg)
    {
       npid_filter = parse_pid_list(pidarg, pid_filter,
@@ -355,6 +363,49 @@ int main (int argc, char **argv)
          fprintf(stderr, "TSDEC: cannot parse pid list \"%s\"\n", pidarg);
          return RET_USAGE;
       }
+   }
+
+   /* -n names a program rather than pids, so the tables have to be read to
+    * find out which pids it is. A transponder normally carries several
+    * services with their own control words, and picking the wrong one gives
+    * output that looks fine and is not. */
+   if (program >= 0)
+   {
+      programs_t progs;
+      int found = programs_read(ifile, &progs, 0);
+      int k;
+
+      if (found <= 0)
+      {
+         fprintf(stderr, "TSDEC: %s holds no program table, so there is no "
+                         "program %d to work on; try -a, or -p with the pids\n",
+                 ifile, program);
+         return RET_USAGE;
+      }
+
+      npid_filter = programs_pids(&progs, program, pid_filter,
+                                  (int) (sizeof(pid_filter) / sizeof(pid_filter[0])));
+
+      if (npid_filter == 0)
+      {
+         fprintf(stderr, "TSDEC: no program %d in this recording. It holds:\n",
+                 program);
+         for (k = 0; k < progs.nprograms; k++)
+            fprintf(stderr, "  #%-5d %s\n", progs.programs[k].program,
+                    progs.programs[k].name[0] ? progs.programs[k].name
+                                               : "(no name in the sdt)");
+         return RET_USAGE;
+      }
+
+      {
+         int j;
+         fprintf(stderr, "TSDEC: program %d, ", program);
+         for (j = 0; j < npid_filter; j++)
+            fprintf(stderr, "%s0x%04x", j ? " " : "", pid_filter[j]);
+         fprintf(stderr, "\n");
+      }
+
+      programs_free(&progs);
    }
 
    /* Ctrl+C should ask the job to stop rather than kill it mid write, so the

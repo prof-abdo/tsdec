@@ -35,7 +35,11 @@ import sys
 PCKTSIZE = 188
 
 # PAT, PMT, CAT, TDT, SIT and the null packet are never scrambled in practice.
-PSI_PIDS = (0x0000, 0x0001, 0x0002, 0x0010, 0x0011, 0x0012, 0x0014, 0x1000, 0x1FFF)
+# The pmt pid has to be in here whatever the generator chose for it: a pmt that
+# gets encrypted is a pmt nobody can read, which is not what a real capture
+# looks like and not what a decoder should be tested against.
+PSI_PIDS = (0x0000, 0x0001, 0x0002, 0x0010, 0x0011, 0x0012, 0x0014, 0x0050,
+            0x0060, 0x1000, 0x1FFF)
 
 
 def make_cw(rng):
