@@ -4,6 +4,23 @@ All notable changes to TSDEC are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project uses
 [semantic versioning](https://semver.org/).
 
+## [2.3.0] - 2026-09-30
+
+### Added
+
+- **A stop that does not need a console.** `-S <file>` asks for the same clean
+  stop that Ctrl+C does by creating a file, and `tsdec_set_stop_file()` does
+  the same for a caller that links the library.
+
+  Ctrl+C is a console control event, and a front end with no console of its own
+  has nowhere to deliver one from. A GUI application on Windows is exactly
+  that: the event either does nothing or arrives as a kill, and a kill throws
+  away every packet already decrypted, which is the one thing the stop button
+  exists to avoid. A file works the same on every platform and does not care
+  whether anybody is attached to a terminal.
+
+  The cancellation test now exercises both mechanisms.
+
 ## [2.2.0] - 2026-09-29
 
 ### Added
@@ -155,6 +172,7 @@ The first release under this repository. Based on TSDEC V0.4.1 by ganymede.
 - The stale Visual Studio project files, which referenced sources that no
   longer exist, were removed.
 
+[2.3.0]: https://github.com/prof-abdo/tsdec/releases/tag/v2.3.0
 [2.2.0]: https://github.com/prof-abdo/tsdec/releases/tag/v2.2.0
 [2.1.0]: https://github.com/prof-abdo/tsdec/releases/tag/v2.1.0
 [2.0.0]: https://github.com/prof-abdo/tsdec/releases/tag/v2.0.0

@@ -3,7 +3,7 @@
 Decrypts recorded DVB transport stream files (`*.ts`) using control words
 logged elsewhere, with the common scrambling algorithm.
 
-Version 2.2. Based on TSDEC V0.4.1 by ganymede, which in turn grew out of
+Version 2.3. Based on TSDEC V0.4.1 by ganymede, which in turn grew out of
 cwldec. The CSA engine and the FFdecsa bitslice implementation come from
 libdvbcsa (Alexandre Becoulet), bundled under `src/dvbcsa`.
 
@@ -140,6 +140,20 @@ The stop is noticed between blocks, a block being about a megabyte, so it takes
 effect within a fraction of a second rather than instantly. A stop in the
 threaded path drains the blocks already in flight instead of abandoning them,
 which is why the output never ends mid frame.
+
+A front end with no console of its own, which is any GUI application on
+Windows, cannot deliver a console control event: there is nowhere to deliver
+it from, so a stop sent that way either does nothing or arrives as a kill, and a
+kill discards the packets already decrypted. `-S <file>` asks for the same
+clean stop by creating a file:
+
+```sh
+tsdec -f log.cwl -i big-recording.ts -o clear.ts -S /tmp/stop-me
+# ... the front end creates /tmp/stop-me when the user presses stop
+# clear.ts holds everything processed before that
+```
+
+`tsdec_set_stop_file()` does the same for a caller that links the library.
 
 ### Driving it from a program
 

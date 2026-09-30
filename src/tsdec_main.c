@@ -42,6 +42,11 @@ static void usage (const char *err)
 "  -r           resync past packets with a missing 0x47 sync byte\n"
 "  -k           do not repair control word checksums, fail instead\n"
 "\n"
+"stopping:\n"
+"  Ctrl+C asks for a stop and keeps what is already decrypted.\n"
+"  -S <file>    stop when this file appears, for a caller with no console\n"
+"                to send Ctrl+C through\n"
+"\n"
 "output:\n"
 "  -v <n>       verbosity 0..9, higher is chattier (default 2)\n"
 "  -q           quiet, same as -v 0\n"
@@ -230,6 +235,7 @@ int main (int argc, char **argv)
 {
    const char *ifile = NULL, *ofile = NULL, *cwfile = NULL, *ccwarg = NULL;
    const char *pidarg = NULL;
+   const char *stopfile = NULL;
    int cw_blocker = 300;
    int verbose = 2;
    int progress = 0;
@@ -318,6 +324,7 @@ int main (int argc, char **argv)
          case 'k': fix_checksums = 0; break;
          case 'q': verbose = 0; break;
          case 'P': progress = 1; break;
+         case 'S': stopfile = val; break;
          default:
             fprintf(stderr, "TSDEC: unknown option -%c\n", opt);
             usage(NULL);
@@ -355,6 +362,12 @@ int main (int argc, char **argv)
     * interrupted on a machine where it somehow hangs. */
    tsdec_install_sigint_handler();
    tsdec_clear_cancel();
+
+   if (stopfile && tsdec_set_stop_file(stopfile) != 0)
+   {
+      fprintf(stderr, "TSDEC: the stop file path is too long: %s\n", stopfile);
+      return RET_USAGE;
+   }
 
    /* the CSA engine can silently produce garbage if it miscompiles, so prove
     * it against the published test vectors before touching any data */

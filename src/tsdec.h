@@ -3,7 +3,7 @@
 #ifndef TSDEC_H
 #define TSDEC_H
 
-#define TSDEC_VERSION "2.2"
+#define TSDEC_VERSION "2.3"
 
 #define PCKTSIZE 188
 
@@ -45,6 +45,18 @@ typedef void (*tsdec_progress_fn)(void *user, unsigned long done,
 void tsdec_request_cancel (void);
 int  tsdec_cancel_requested (void);
 void tsdec_clear_cancel (void);
+
+/* Ask for the stop to come from a file appearing instead of from a signal.
+ *
+ * A caller with no console of its own, which is any GUI application on
+ * Windows, cannot deliver a console control event: there is nowhere to
+ * deliver it from, so the request either does nothing or arrives as a kill,
+ * and a kill discards the packets already decrypted. Creating this file asks
+ * for the same clean stop that Ctrl+C does, on every platform.
+ *
+ * Pass NULL to go back to signals only. Returns 0, or -1 if the path will not
+ * fit in the small fixed buffer this keeps it in. */
+int  tsdec_set_stop_file (const char *path);
 
 /* Install a handler so that Ctrl+C asks for a stop instead of killing the
  * process mid write. Returns 0 on success. */

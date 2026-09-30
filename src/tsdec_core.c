@@ -48,6 +48,17 @@ int g_verbose = 2;
  */
 static volatile sig_atomic_t g_cancel = 0;
 
+/* An optional file whose presence means "stop". A front end creates it to ask
+ * for a stop without needing a console.
+ *
+ * This exists because the console control event is not available to every
+ * caller. A GUI application on Windows has no console of its own, and
+ * GenerateConsoleCtrlEvent has nowhere to deliver the event from, so a stop
+ * sent that way either does nothing or degrades into a kill, and a kill throws
+ * away every packet already decrypted. A file works the same on every
+ * platform and does not care whether anybody is attached to a terminal. */
+static char g_stop_file[260] = { 0 };
+
 static void on_sigint (int sig)
 {
    (void) sig;
@@ -61,12 +72,40 @@ void tsdec_request_cancel (void)
 
 int tsdec_cancel_requested (void)
 {
+   if (g_cancel)
+      return 1;
+
+   /* asking a few times a second is cheap next to decrypting a block, and it
+    * is the only way a caller with no console can ask at all */
+   if (g_stop_file[0])
+   {
+      FILE *f = fopen(g_stop_file, "rb");
+      if (f)
+      {
+         fclose(f);
+         g_cancel = 1;
+      }
+   }
+
    return g_cancel != 0;
 }
 
 void tsdec_clear_cancel (void)
 {
    g_cancel = 0;
+}
+
+int tsdec_set_stop_file (const char *path)
+{
+   if (!path || !path[0])
+   {
+      g_stop_file[0] = 0;
+      return 0;
+   }
+   if (strlen(path) >= sizeof(g_stop_file))
+      return -1;
+   strcpy(g_stop_file, path);
+   return 0;
 }
 
 int tsdec_install_sigint_handler (void)
