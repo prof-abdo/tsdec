@@ -13,3 +13,5 @@ cancel_test
 cancel_test.exe
 *.log
 
+
+example_decrypted.ts

@@ -99,6 +99,12 @@ bench_csa: tools/bench_csa.c $(CSA_SRC)
 cancel_test: tools/cancel_test.c $(LIB_SRC)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
+# checks the residue rule: the last partial block of a payload is covered by
+# the stream cipher alone, which is what a recording whose packets carry an
+# adaptation field depends on
+residue_test: tools/residue_test.c $(LIB_SRC)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
 PYTHON ?= python
 
 # the cancellation test needs a recording big enough that one worker cannot
@@ -109,14 +115,16 @@ test/cancel.enc.ts: tools/mk_ts.py tools/mk_test_pair.py tsdec
 	$(PYTHON) tools/mk_test_pair.py -i test/cancel.plain.ts \
 		-o test/cancel.enc.ts -c test/cancel.cwl -t ./tsdec -w 20000 --quiet
 
-test: csa_selftest cancel_test tsdec test/cancel.enc.ts
+test: csa_selftest cancel_test residue_test tsdec test/cancel.enc.ts
 	./csa_selftest
 	./cancel_test
+	./residue_test
 
 bench: bench_csa
 	./bench_csa
 
 clean:
 	rm -f tsdec tsdec.exe csa_selftest csa_selftest.exe bench_csa bench_csa.exe
+	rm -f residue_test residue_test.exe
 	rm -f cancel_test cancel_test.exe
 	rm -rf obj
