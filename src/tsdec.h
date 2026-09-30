@@ -3,7 +3,7 @@
 #ifndef TSDEC_H
 #define TSDEC_H
 
-#define TSDEC_VERSION "2.3"
+#define TSDEC_VERSION "2.4"
 
 #define PCKTSIZE 188
 

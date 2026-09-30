@@ -3,7 +3,7 @@
 Decrypts recorded DVB transport stream files (`*.ts`) using control words
 logged elsewhere, with the common scrambling algorithm.
 
-Version 2.3. Based on TSDEC V0.4.1 by ganymede, which in turn grew out of
+Version 2.4. Based on TSDEC V0.4.1 by ganymede, which in turn grew out of
 cwldec. The CSA engine and the FFdecsa bitslice implementation come from
 libdvbcsa (Alexandre Becoulet), bundled under `src/dvbcsa`.
 
@@ -96,7 +96,7 @@ tsdec -p 0x100,0x101 -f log.cwl -i rec.ts -o clear.ts
 |---|---|
 | `-t <n>` | decrypt with `n` worker threads; `1` disables threading |
 | `-b <n>` | ignore a parity change shorter than `n` packets |
-| `-r` | resync past packets whose sync byte is missing |
+| `-r` | resync when the control word log stops lining up with the recording |
 | `-k` | do not repair control word checksums, fail instead |
 
 `-b` exists because of a real muxing artefact. Some transmissions flip the
@@ -154,6 +154,30 @@ tsdec -f log.cwl -i big-recording.ts -o clear.ts -S /tmp/stop-me
 ```
 
 `tsdec_set_stop_file()` does the same for a caller that links the library.
+
+## When the log does not line up
+
+A control word log is normally assumed to start where the recording starts.
+Very often it does not: a capture started by hand begins partway through, or a
+log has a key missing from the middle, and from that point on every packet
+decrypts with the wrong key. A wrong key produces no error, it just produces
+rubbish, so nothing says so unless something is looking.
+
+`-r` looks. A packet that starts a PES unit decrypts to a known `00 00 01`, so
+a PUSI packet on a pid that carries elementary streams is a free check. When it
+fails, the log is searched for the key that does fit and the run continues from
+there, reporting how many times it had to do that.
+
+```sh
+tsdec -f log.cwl -i recording.ts -o clear.ts -r
+```
+
+It only ever checks pids already seen to start a PES unit. A PUSI packet on a
+PSI pid starts with the pointer field of a table section rather than with
+`00 00 01`, so treating every PUSI packet as evidence would read every table
+update as a lost key and destroy a run that was working. Missing a resync
+leaves rubbish; inventing one throws away a good decryption, so the check
+errs the first way.
 
 ### Driving it from a program
 

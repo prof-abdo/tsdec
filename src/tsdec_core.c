@@ -606,10 +606,18 @@ static void report_stats (const stats_t *s, double secs)
 static int plan_block (csa_ctx_t *ctx, unsigned char *buf, size_t n,
                        const cwl_t *cwl, int *cw_of, int *synced, int *cur_cw,
                        int *last_parity, const int *pid_filter, int npid_filter,
-                       stats_t *stats)
+                       int allow_resync, stats_t *stats)
 {
    size_t i;
    int k;
+
+   /* Which pids have been seen to start a PES unit. The resync check is only
+    * meaningful on those, because 00 00 01 is the known plaintext of an
+    * elementary stream and nothing else: a PUSI packet on a psi pid starts
+    * with a pointer field, and a PUSI packet on a scrambled pid is exactly
+    * the packet whose payload we are trying to read. 8192 flags is 8 KiB, and
+    * it is the whole pid space. */
+   static unsigned char pid_has_pes[8192];
 
    for (i = 0; i < n; i++)
    {
@@ -662,24 +670,99 @@ static int plan_block (csa_ctx_t *ctx, unsigned char *buf, size_t n,
             }
          }
 
-         if (best < 0)
+      if (best < 0)
+      {
+         stats->dropped_packets++;
+         continue;
+      }
+
+      *synced = 1;
+      *cur_cw = best;
+      *last_parity = cwl->cws[best].parity;
+      csa_key_set_ctx(ctx, cwl->cws[best].cw, cwl->cws[best].parity);
+      /* a pid that just produced a PES start code under some key is one we can
+       * check later, which is the only thing that makes the resync test safe */
+      pid_has_pes[packet_pid(p)] = 1;
+      stats->sync_count++;
+      tsdec_log(3, "sync at packet %lu using cw #%d (parity %d)",
+                stats->total_packets + i, best, cwl->cws[best].parity);
+   }
+
+   /* Past the first sync the logged cw is taken on trust, which is normally
+    * right and costs nothing to check. It is not right when the recording was
+    * cut somewhere other than a key change, which is the ordinary case for a
+    * capture started by hand: from there on every packet decrypts to noise and
+    * nothing anywhere says so, because a wrong key produces no error, it just
+    * produces rubbish.
+    *
+    * A transport stream offers a check, but not the obvious one. It is tempting
+    * to say that a PUSI packet decrypts to a PES start code, so a PUSI packet
+    * that does not proves the key is wrong. That is wrong, and it took a
+    * recording with a PAT in it to show it: a PUSI packet on a PSI pid starts
+    * with the pointer field of a table section, not with 00 00 01, so every
+    * table update would have been read as a lost key and the run shredded.
+    *
+    * So the check is only made on packets where the known plaintext actually
+    * is, which is a pid that has already been seen to start a PES unit. Those
+    * are the pids that carry elementary streams, and they carry them for the
+    * whole recording, so learning which they are at the first sync is enough.
+    * A pid that has never produced a PES start code is left alone, which means
+    * a wrong key on a stream we have not validated goes unnoticed. That is the
+    * safe way round: missing a resync leaves rubbish, inventing one destroys a
+    * decryption that was working. */
+   else if (allow_resync && IsPUSIPacket(p) && pid_has_pes[packet_pid(p)])
+   {
+      int par = GetPacketParity(p) ? 1 : 0;
+      int found = -1;
+
+      csa_key_set_ctx(ctx, cwl->cws[*cur_cw].cw,
+                      (unsigned char) cwl->cws[*cur_cw].parity);
+      memcpy(trial, p, PCKTSIZE);
+      csa_decrypt_ctx(ctx, trial);
+
+      if (!packet_has_pes_header(trial))
+      {
+         for (k = 0; k < cwl->count; k++)
          {
-            stats->dropped_packets++;
-            continue;
+            if (cwl->cws[k].parity != par)
+               continue;
+            csa_key_set_ctx(ctx, cwl->cws[k].cw, cwl->cws[k].parity);
+            memcpy(trial, p, PCKTSIZE);
+            csa_decrypt_ctx(ctx, trial);
+            if (packet_has_pes_header(trial))
+            {
+               found = k;
+               break;
+            }
          }
 
-         *synced = 1;
-         *cur_cw = best;
-         *last_parity = cwl->cws[best].parity;
-         csa_key_set_ctx(ctx, cwl->cws[best].cw, cwl->cws[best].parity);
-         stats->sync_count++;
-         tsdec_log(3, "sync at packet %lu using cw #%d (parity %d)",
-                   stats->total_packets + i, best, cwl->cws[best].parity);
+         /* The pid is known to carry elementary streams, so a payload that
+          * starts no unit at all means the key has gone, not that this
+          * particular packet is a table or a stray. */
+         if (found >= 0 && found != *cur_cw)
+         {
+            tsdec_log(2, "packet %lu: lost the key, the control word log is "
+                      "offset; resuming at cw #%d", stats->total_packets + i,
+                      found);
+            *cur_cw = found;
+            *last_parity = cwl->cws[found].parity;
+            csa_key_set_ctx(ctx, cwl->cws[found].cw,
+                            (unsigned char) cwl->cws[found].parity);
+            stats->resync_count++;
+         }
       }
+      else
+      {
+         /* still the right key, and we know this pid carries elementary
+          * streams, so remember that for the next check */
+         pid_has_pes[packet_pid(p)] = 1;
+      }
+   }
 
       {
          int par = GetPacketParity(p) ? 1 : 0;
 
+         /* the plain path: follow the log across a parity change */
          if (par != *last_parity)
          {
             int next = -1;
@@ -807,6 +890,7 @@ typedef struct
    int           progress;
    const int    *pid_filter;
    int           npid_filter;
+   int           allow_resync;
    int           nworkers;
 
    /* progress reporting, both polled from the scout */
@@ -979,7 +1063,7 @@ static void *worker_main (void *arg)
  * or the caller asked for one worker. */
 static int decrypt_serial (const char *ifile, FILE *out, const cwl_t *cwl,
                            int verbose, int progress, const int *pid_filter,
-                           int npid_filter, stats_t *stats,
+                           int npid_filter, int allow_resync, stats_t *stats,
                            tsdec_progress_fn on_progress, void *progress_user)
 {
    reader_t r;
@@ -1026,7 +1110,7 @@ static int decrypt_serial (const char *ifile, FILE *out, const cwl_t *cwl,
       }
 
       plan_block(ctx, r.buf, n, cwl, cw_of, &synced, &cur_cw, &last_parity,
-                 pid_filter, npid_filter, stats);
+                 pid_filter, npid_filter, allow_resync, stats);
       decrypt_block(ctx, r.buf, n, cwl, cw_of, batch);
 
       if (fwrite(r.buf, PCKTSIZE, n, out) != n)
@@ -1146,7 +1230,8 @@ static void scout_main (pipeline_t *pl)
       memcpy(b->buf, r.buf, n * PCKTSIZE);
 
       plan_block(ctx, b->buf, n, pl->cwl, b->cw_of, &synced, &cur_cw,
-                 &last_parity, pl->pid_filter, pl->npid_filter, &pl->scout_stats);
+                 &last_parity, pl->pid_filter, pl->npid_filter,
+                 pl->allow_resync, &pl->scout_stats);
       pl->scout_stats.total_packets += (unsigned long) n;
 
       mutex_lock(&pl->mutex);
@@ -1203,7 +1288,7 @@ static void scout_main (pipeline_t *pl)
 static int decrypt_parallel (const char *ifile, const char *ofile,
                              const cwl_t *cwl, int nworkers, int verbose,
                              int progress, const int *pid_filter,
-                             int npid_filter, stats_t *stats,
+                             int npid_filter, int allow_resync, stats_t *stats,
                              tsdec_progress_fn on_progress, void *progress_user)
 {
    pipeline_t pl;
@@ -1219,6 +1304,7 @@ static int decrypt_parallel (const char *ifile, const char *ofile,
    pl.progress = progress;
    pl.pid_filter = pid_filter;
    pl.npid_filter = npid_filter;
+   pl.allow_resync = allow_resync;
    pl.nworkers = nworkers;
    pl.on_progress = on_progress;
    pl.progress_user = progress_user;
@@ -1334,8 +1420,10 @@ static int decrypt_parallel (const char *ifile, const char *ofile,
    stats->sync_count = pl.scout_stats.sync_count;
    stats->corrupt_packets = pl.scout_stats.corrupt_packets;
    stats->dropped_packets = pl.scout_stats.dropped_packets;
-   stats->resync_count = pl.scout_stats.sync_count
-                        ? pl.scout_stats.sync_count - 1 : 0;
+   /* resync is counted by the scout as it happens, not derived from the sync
+    * count: losing and regaining the key somewhere in the middle is one
+    * resync and no new sync, which is exactly what used to go unreported */
+   stats->resync_count = pl.scout_stats.resync_count;
    stats->canceled = pl.canceled;
    if (pl.canceled && ret == RET_OK)
       ret = RET_CANCELED;
@@ -1371,8 +1459,8 @@ int tsdec_run (const tsdec_job_t *job, stats_t *stats)
       tsdec_log(3, "decrypting with %d worker threads", job->nworkers);
       ret = decrypt_parallel(job->ifile, job->ofile, job->cwl, job->nworkers,
                              job->verbose, job->progress, job->pid_filter,
-                             job->npid_filter, stats, job->on_progress,
-                             job->progress_user);
+                             job->npid_filter, job->allow_resync, stats,
+                             job->on_progress, job->progress_user);
    }
    else
    {
@@ -1382,8 +1470,8 @@ int tsdec_run (const tsdec_job_t *job, stats_t *stats)
       {
          ret = decrypt_serial(job->ifile, out, job->cwl, job->verbose,
                               job->progress, job->pid_filter,
-                              job->npid_filter, stats, job->on_progress,
-                              job->progress_user);
+                              job->npid_filter, job->allow_resync, stats,
+                              job->on_progress, job->progress_user);
          fflush(out);
          if (out != stdout)
             fclose(out);
@@ -1414,7 +1502,10 @@ int tsdec_run (const tsdec_job_t *job, stats_t *stats)
       ret = RET_NOTCRYPTED;
    }
 
-   (void) job->allow_resync;
+   if (stats->resync_count)
+      tsdec_log(1, "resynced %lu time(s): the control word log does not line "
+                "up with the whole recording", stats->resync_count);
+
    return ret;
 }
 

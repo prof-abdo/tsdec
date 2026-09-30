@@ -4,6 +4,41 @@ All notable changes to TSDEC are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project uses
 [semantic versioning](https://semver.org/).
 
+## [2.4.0] - 2026-09-30
+
+### Fixed
+
+- **`-r` did nothing.** The option was parsed and then explicitly discarded,
+  so asking to resync past corrupt packets changed no behaviour at all, and
+  the resync count in the summary was derived from the sync count rather than
+  counted. It now works.
+
+  The test is the same one the initial sync has always used: a packet that
+  starts a PES unit decrypts to `00 00 01`, so a PUSI packet whose payload
+  does not is a packet decrypted with the wrong key. Past the first sync that
+  used to be taken on trust, which is normally right and silent when it is
+  not, so a recording that was cut somewhere other than a key change decrypts
+  to noise from that point on with nothing reported anywhere.
+
+  Against a control word log with a key missing from the middle, `-r` takes a
+  run from 35677 corrupt packets to 3971, and says how many times it had to
+  resume.
+
+- **A false positive that would have been much worse.** The obvious first
+  version of that check was "any PUSI packet that does not decrypt to a PES
+  start code means the key is wrong". That is wrong, and a recording with a
+  PAT in it is what showed it: a PUSI packet on a PSI pid begins with the
+  pointer field of a table section, not `00 00 01`, so every table update read
+  as a lost key and a run that was decrypting perfectly came out shredded. The
+  check is now only made on pids already seen to start a PES unit, which is
+  where the known plaintext actually is.
+
+### Changed
+
+- The resync count is what the scout actually counted, instead of the sync
+  count minus one. Losing and regaining the key in the middle of a recording
+  is one resync and no new sync, which is what went unreported.
+
 ## [2.3.0] - 2026-09-30
 
 ### Added
@@ -172,6 +207,7 @@ The first release under this repository. Based on TSDEC V0.4.1 by ganymede.
 - The stale Visual Studio project files, which referenced sources that no
   longer exist, were removed.
 
+[2.4.0]: https://github.com/prof-abdo/tsdec/releases/tag/v2.4.0
 [2.3.0]: https://github.com/prof-abdo/tsdec/releases/tag/v2.3.0
 [2.2.0]: https://github.com/prof-abdo/tsdec/releases/tag/v2.2.0
 [2.1.0]: https://github.com/prof-abdo/tsdec/releases/tag/v2.1.0
